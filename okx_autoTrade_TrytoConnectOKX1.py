@@ -1,40 +1,54 @@
-                #!/usr/bin/env python3
+    #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 OKX 实时成交价监听 + 多层次价位计算 + 动态止盈 + 多通道消息推送（钉钉/飞书）
-
-版本: v5.3
-更新: 2026-09-12
-
-v5.3 修正：
-- 买入失败不再重试：交易地域/合规限制 → 常规黑名单；未知错误 → 未知异常黑名单
+版本: v5.5
+更新: 2026-09-13
+v5.5 新增（业务规则）：
+1.以 okx_ding_ok_config.xlsx"币对配置"中的最高价(ref_high)/最低价(ref_low)作为程序计算范围
+2.某币对当前成交价不在此范围内（高于最高价或低于最低价）时：
+  - 自动记入同目录 okx_ding_ok_out_of_range.xlsx（含币对、当前价、范围上下限、原因"超出程序运行计算的范围"、时间）
+  - 立即从买入列表剔除，不再参与买入；重启后通过 xlsx 记录保持剔除状态
+  - 触发钉钉/飞书推送通知
+3.已有持仓的止盈/止损管理不受影响（基于成本价与峰值，与价格范围无关）
+v5.4.1_fix 修复（工程层，交易策略与 v5.4_fix 一致）：
+1.修复 load_high_low() 中损坏的字典代码（重复/残缺键导致 SyntaxError），程序此前无法启动
+2.修复 WebSocket pong 处理：OKX 心跳回复 "pong" 被当作业务消息解析报错，导致每 25 秒误推一次"系统异常"
+3.WebSocket 连接 8443 端口失败时自动回退 443，提升连接成功率
+4.市价买入移除 minSz 单位错配检查（minSz 为币本位最小量，按计价货币下单时交给交易所校验），避免误加黑名单
+5.显式导入 urllib.error
+v5.4_fix 修正：
+1.止盈激活门槛修改为盈利6.5%(原5%)，盈利6.5%回撤1.5%保证清仓保底盈利5%
+2.配对卖点逻辑重构：普通持仓触碰配对卖点不会直接卖出；仅已激活动态止盈后由动态回撤规则触发离场
+3.豁免规则：持仓历史max_loss_pct <=‑0.05(曾经亏损超5%)，触碰配对卖点只要回本即可清仓，不受动态止盈约束
+4.止盈激活后浮盈回落到6.5%以下，立刻撤销profit_triggered，重置止盈价，防止毛刺虚假激活后亏损卖出
+5.保留原有：持仓亏损超5%记录，只要价格回本，无条件直接清仓
+6.买入失败不再重试：交易地域/合规限制 → 常规黑名单；未知错误 → 未知异常黑名单
   均立即从买入列表剔除并推送通知，不再 30 秒/120 秒重试
-
 v5.2 优化（工程层，交易策略不变）：
 - 推送异步化：推送走后台线程池，网络慢不再阻塞行情主循环
 - 状态保存节流：常规 tick 每 5 秒落盘一次，关键事件（买入/卖出/止盈激活/清仓）即时保存
-
 v5.1 修正内容：
 1. 买入前强制刷新 API 持仓并双重检查，杜绝已有持仓重复买入
-2. 所有卖出操作（卖点/止盈/动态止损）确保盈利 ≥5% 才执行（回本清仓豁免）
-3. 动态止损表按上涨幅度执行动态清仓（盈利 20% 即清仓，利益最大化）
-4. 黑名单拆分为【常规黑名单】+【未知异常黑名单】两类，均从买入列表剔除并在下单前检查
-5. 静默期机制审查：卖出/清仓后进入静默期并从买入队列移出，静默期满自动恢复待买入
-6. 亏损超 5% 的持仓：记录最大亏损，回本即清仓（不要求盈利 5%），清仓后同样进入静默期
-
+2. 动态止损表按上涨幅度执行动态清仓（盈利 20% 即清仓，利益最大化）
+3. 黑名单拆分为【常规黑名单】+【未知异常黑名单】两类，均从买入列表剔除并在下单前检查
+4. 静默期机制审查：卖出/清仓后进入静默期并从买入队列移出，静默期满自动恢复待买入
 推送方式在 .env 中通过 NOTIFY_CHANNEL 配置：
   NOTIFY_CHANNEL = dingtalk | feishu | both | none   （默认 dingtalk）
   钉钉: DINGTALK_WEBHOOK_okx / DINGTALK_SECRET_okx
   飞书: FEISHU_WEBHOOK_okx  / FEISHU_SECRET_okx
-
 核心买入逻辑：
 1. 价格跌破任意买点（回撤2下/回调2下/过渡2下/极限2下）时，激活买入信号，记录当前最低价
 2. 价格继续下跌则更新最低价
 3. 当价格从最低价反弹1%且仍低于该买点时，执行买入
 4. 买入成功后或价格回升至买点之上时，信号自动取消
 5. 其他风控（黑名单、观察列表、静默期、持仓检查等）保持不变
+卖出业务规则 v5.4_fix:
+1.普通持仓：盈利>=6.5%才激活动态止盈，动态表回撤离场，保证清仓保底盈利5%；触碰配对卖点不会直接卖出
+2.豁免场景：持仓期间max_loss_pct <=‑0.05（曾经亏损超5%），触碰配对卖点只要回本即可直接清仓，不受动态止盈限制；
+3.豁免场景2：持仓曾经亏损超5%，价格只要回本，无论价位直接清仓
+4.盈利>=20%无条件直接清仓
 """
-
 import base64
 import csv
 import hmac
@@ -47,29 +61,28 @@ import struct
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, List, Tuple
 from dotenv import load_dotenv
-
 load_dotenv()
-
 # ==================== 配置常量 ====================
 PROGRAM_NAME = "okx_ding_ok"
-VERSION = "v5.3"
-
+VERSION = "v5.5"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(BASE_DIR, f"{PROGRAM_NAME}_config.xlsx")
 BLACKLIST_FILE = os.path.join(BASE_DIR, f"{PROGRAM_NAME}_blacklist.csv")
 UNKNOWN_BLACKLIST_FILE = os.path.join(BASE_DIR, f"{PROGRAM_NAME}_unknown_blacklist.csv")
 OBSERVE_LIST_FILE = os.path.join(BASE_DIR, f"{PROGRAM_NAME}_observe_list.csv")
+# v5.5：价格超出配置计算范围（[ref_low, ref_high]）的币对记录表，与主程序同目录
+OUT_OF_RANGE_FILE = os.path.join(BASE_DIR, f"{PROGRAM_NAME}_out_of_range.xlsx")
+OUT_OF_RANGE_HEADER = ["inst_id", "current_price", "range_high", "range_low", "reason", "add_time"]
 DATA_DIR = os.path.join(BASE_DIR, f"{PROGRAM_NAME}_data")
-
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
-
 TRADE_FILE = os.path.join(DATA_DIR, f"{PROGRAM_NAME}_tradeRecord.csv")
 POSITIONS_FILE = os.path.join(DATA_DIR, f"{PROGRAM_NAME}_positions.csv")
 COOLDOWN_FILE = os.path.join(DATA_DIR, f"{PROGRAM_NAME}_cooldown.csv")
@@ -78,7 +91,6 @@ PAIR_STATUS_FILE = os.path.join(DATA_DIR, f"{PROGRAM_NAME}_pair_status.csv")
 BUY_QUEUE_FILE = os.path.join(DATA_DIR, f"{PROGRAM_NAME}_buy_queue.csv")
 FUNDS_FILE = os.path.join(DATA_DIR, f"{PROGRAM_NAME}_funds.csv")
 LOG_FILE = os.path.join(DATA_DIR, f"{PROGRAM_NAME}_run.log")
-
 TRADE_HEADER = ["timestamp", "inst_id", "direction", "price", "qty", "amount", "remaining_funds", "position_price", "profit", "profit_pct", "reason"]
 POSITIONS_HEADER = ["inst_id", "position_price", "position_qty", "position_amount", "buy_time", "buy_reason", "pair_type", "pair_sell_line", "peak_price", "stop_price", "profit_triggered", "check_level", "last_check_time", "current_price", "market_value", "unrealized_pnl", "unrealized_pnl_pct", "max_loss_pct"]
 COOLDOWN_HEADER = ["inst_id", "sell_time", "cooldown_until"]
@@ -89,29 +101,23 @@ FUNDS_HEADER = ["remaining_funds", "total_position_market_value", "total_unreali
 BLACKLIST_HEADER = ["inst_id", "reason", "add_time"]
 UNKNOWN_BLACKLIST_HEADER = ["inst_id", "reason", "add_time"]
 OBSERVE_LIST_HEADER = ["inst_id", "reason", "add_time"]
-
 OKX_WS_HOST = "ws.okx.com"
 OKX_WS_PORT = 8443
 OKX_WS_PATH = "/ws/v5/public"
 OKX_REST_BASE = "https://www.okx.com"
-
 PING_INTERVAL = 25
 RECONNECT_DELAY = 3
 DEFAULT_PUSH_INTERVAL = 3.0
-
 BREAK_ALERT_MAX_PER_DAY = 4
 BREAK_ALERT_MIN_INTERVAL_SEC = 17 * 60
 BASE_TIME_NODES = [17, 34, 63, 125, 250, 500, 1000]
-
 CSV_LOCK = threading.RLock()
-
 # ==================== 全局变量 ====================
 _okx_client = None
 _balance_cache = {"value": 0.0, "timestamp": 0.0}
 _BALANCE_CACHE_TTL = 3.0
 _positions_cache = {"data": {}, "timestamp": 0.0}
 _POSITIONS_CACHE_TTL = 30
-
 # ==================== 动态止盈表 ====================
 PROFIT_STOP_MAP = [
     (0.065, 0.015),
@@ -223,7 +229,7 @@ PROFIT_STOP_MAP = [
     (0.171, 0.0044),
     (0.172, 0.0043),
     (0.173, 0.0042),
-    (0.174, 0.0041),    
+    (0.174, 0.0041),
     (0.175, 0.0040),
     (0.176, 0.0039),
     (0.177, 0.0038),
@@ -249,22 +255,20 @@ PROFIT_STOP_MAP = [
     (0.197, 0.0018),
     (0.198, 0.0017),
     (0.199, 0.0016),
-    (0.200, 0),    # 盈利 ≥20% 立即清仓（v5.1）
+    (0.200, 0),    # 盈利 ≥20% 立即清仓
 ]
-
 def get_stop_loss(profit_pct: float) -> float:
-    """按当前盈利水平返回动态回撤清仓比例（v5.1 修复：须从大到小匹配）"""
+    """按当前盈利水平返回动态回撤清仓比例（须从大到小匹配）"""
     for p, s in reversed(PROFIT_STOP_MAP):
         if profit_pct >= p:
             return s
     return 0.015
-
 # ==================== 日志系统 ====================
 class Logger:
     def __init__(self, log_file: str):
         self.log_file = log_file
         self._ensure_log_file()
-    
+
     def _ensure_log_file(self):
         if not os.path.exists(self.log_file):
             try:
@@ -274,11 +278,11 @@ class Logger:
                     f.write("=" * 60 + "\n")
             except Exception:
                 pass
-    
+
     def set_dingtalk(self, webhook: str, secret: str = None):
         """已废弃（v5.0）：推送通道统一由 .env 的 NOTIFY_CHANNEL 配置"""
         pass
-    
+
     def _should_write_log(self, level: str, category: str) -> bool:
         if level == "ERROR":
             return True
@@ -287,7 +291,7 @@ class Logger:
         if level == "WARN":
             return category in ["insufficient_funds", "connection_error"]
         return False
-    
+
     def _write(self, level: str, msg: str, category: str = "general"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_line = f"[{timestamp}] [{level}] {msg}"
@@ -300,28 +304,27 @@ class Logger:
                 pass
         if level == "ERROR":
             self._push_error(msg)
-    
+
     def _push_error(self, msg: str):
         try:
             push_notify(f"🚨 系统异常\n\n{msg}\n\n时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", title="系统异常", msg_type="text")
         except Exception as e:
             print(f"[日志] 异常推送失败: {e}")
-    
-    def info(self, msg: str, category: str = "general"): 
+
+    def info(self, msg: str, category: str = "general"):
         self._write("INFO", msg, category)
-    
-    def warn(self, msg: str, category: str = "general"): 
+
+    def warn(self, msg: str, category: str = "general"):
         self._write("WARN", msg, category)
-    
-    def error(self, msg: str, category: str = "general"): 
+
+    def error(self, msg: str, category: str = "general"):
         self._write("ERROR", msg, category)
-    
+
     def debug(self, msg: str, category: str = "debug"):
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [DEBUG] {msg}")
-
 # ==================== 钉钉推送 ====================
 def build_dingtalk_url(webhook: str, secret: str = None) -> str:
-    if not secret: 
+    if not secret:
         return webhook
     timestamp = str(int(time.time() * 1000))
     sign_string = f"{timestamp}\n{secret}".encode("utf-8")
@@ -330,9 +333,8 @@ def build_dingtalk_url(webhook: str, secret: str = None) -> str:
     query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
     query.extend([("timestamp", timestamp), ("sign", sign)])
     return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, urllib.parse.urlencode(query), parts.fragment))
-
 def push_to_dingtalk(webhook: str, secret: str = None, text: str = None, title: str = "交易提醒", msg_type: str = "text") -> bool:
-    if not webhook: 
+    if not webhook:
         return False
     try:
         url = build_dingtalk_url(webhook, secret)
@@ -343,7 +345,6 @@ def push_to_dingtalk(webhook: str, secret: str = None, text: str = None, title: 
     except Exception as e:
         print(f"[钉钉] 推送失败: {e}")
         return False
-
 # ==================== 飞书推送 ====================
 def push_to_feishu(webhook: str, secret: str = None, text: str = None, title: str = "交易提醒", msg_type: str = "text") -> bool:
     """飞书自定义机器人推送，支持签名校验（v5.0 新增）
@@ -381,7 +382,6 @@ def push_to_feishu(webhook: str, secret: str = None, text: str = None, title: st
     except Exception as e:
         print(f"[飞书] 推送失败: {e}")
         return False
-
 # ==================== 多通道推送统一入口（v5.0） ====================
 # .env 配置：
 #   NOTIFY_CHANNEL      = dingtalk | feishu | both | none   （默认 dingtalk）
@@ -394,7 +394,6 @@ NOTIFY_CONFIG = {
     "feishu_webhook": "",
     "feishu_secret": "",
 }
-
 def setup_notify(channel: str = "dingtalk", ding_webhook: str = "", ding_secret: str = "", feishu_webhook: str = "", feishu_secret: str = ""):
     """初始化推送通道（在 main 启动时调用一次）"""
     NOTIFY_CONFIG["channel"] = (channel or "dingtalk").strip().lower()
@@ -402,10 +401,8 @@ def setup_notify(channel: str = "dingtalk", ding_webhook: str = "", ding_secret:
     NOTIFY_CONFIG["ding_secret"] = ding_secret
     NOTIFY_CONFIG["feishu_webhook"] = feishu_webhook
     NOTIFY_CONFIG["feishu_secret"] = feishu_secret
-
 # 全局推送线程池（v5.2 优化：推送异步化，不阻塞行情主循环）
 NOTIFY_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="notify")
-
 def _push_notify_worker(text: str, title: str, msg_type: str):
     """后台线程执行实际推送，异常不外抛"""
     try:
@@ -419,7 +416,6 @@ def _push_notify_worker(text: str, title: str, msg_type: str):
     except Exception as e:
         print(f"[推送] 后台推送异常: {e}")
         return False
-
 def push_notify(text: str, title: str = "交易提醒", msg_type: str = "text") -> bool:
     """统一推送入口（v5.2 优化）：后台线程异步推送，即使网络慢也不阻塞行情主循环"""
     try:
@@ -427,7 +423,6 @@ def push_notify(text: str, title: str = "交易提醒", msg_type: str = "text") 
     except Exception as e:
         print(f"[推送] 提交后台推送失败: {e}")
     return True
-
 # ==================== CSV 辅助函数 ====================
 def _ensure_csv_header(file_path: str, header: List[str]):
     if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
@@ -465,7 +460,6 @@ def _ensure_csv_header(file_path: str, header: List[str]):
             writer.writerows(migrated)
     except Exception as e:
         print(f"[CSV] 迁移失败 {file_path}: {e}")
-
 def _read_csv(file_path: str, header: List[str]) -> List[Dict]:
     _ensure_csv_header(file_path, header)
     result = []
@@ -476,7 +470,6 @@ def _read_csv(file_path: str, header: List[str]) -> List[Dict]:
     except Exception:
         pass
     return result
-
 def _write_csv_row(file_path: str, header: List[str], row: Dict):
     try:
         _ensure_csv_header(file_path, header)
@@ -484,7 +477,6 @@ def _write_csv_row(file_path: str, header: List[str], row: Dict):
             csv.writer(f).writerow([row.get(c, "") for c in header])
     except Exception as e:
         print(f"[CSV] 写入失败 {file_path}: {e}")
-
 def _write_csv_all(file_path: str, header: List[str], rows: List[Dict]):
     try:
         with CSV_LOCK, open(file_path, 'w', encoding='utf-8-sig', newline='') as f:
@@ -494,12 +486,10 @@ def _write_csv_all(file_path: str, header: List[str], rows: List[Dict]):
                 writer.writerow(row)
     except Exception as e:
         print(f"[CSV] 写入失败 {file_path}: {e}")
-
 # ==================== 黑名单与待观察列表 ====================
 def load_blacklist() -> set:
     rows = _read_csv(BLACKLIST_FILE, BLACKLIST_HEADER)
     return {row.get("inst_id", "") for row in rows if row.get("inst_id")}
-
 def add_to_blacklist(inst_id: str, reason: str):
     if not inst_id:
         return
@@ -512,11 +502,9 @@ def add_to_blacklist(inst_id: str, reason: str):
         "add_time": now_str
     })
     print(f"[黑名单] {inst_id} 已加入黑名单，原因: {reason}")
-
 def load_unknown_blacklist() -> set:
     rows = _read_csv(UNKNOWN_BLACKLIST_FILE, UNKNOWN_BLACKLIST_HEADER)
     return {row.get("inst_id", "") for row in rows if row.get("inst_id")}
-
 def add_to_unknown_blacklist(inst_id: str, reason: str):
     """未知异常黑名单（v5.1）：连续未知错误等原因加入，从买入列表剔除"""
     if not inst_id:
@@ -530,11 +518,9 @@ def add_to_unknown_blacklist(inst_id: str, reason: str):
         "add_time": now_str
     })
     print(f"[未知异常黑名单] {inst_id} 已加入，原因: {reason}")
-
 def load_observe_list() -> set:
     rows = _read_csv(OBSERVE_LIST_FILE, OBSERVE_LIST_HEADER)
     return {row.get("inst_id", "") for row in rows if row.get("inst_id")}
-
 def add_to_observe_list(inst_id: str, reason: str):
     if not inst_id:
         return
@@ -547,7 +533,52 @@ def add_to_observe_list(inst_id: str, reason: str):
         "add_time": now_str
     })
     print(f"[待观察] {inst_id} 已加入待观察列表，原因: {reason}")
-
+# ==================== 超出计算范围记录（v5.5） ====================
+def load_out_of_range() -> set:
+    """读取超出计算范围 xlsx（与主程序同目录），返回已剔除的 inst_id 集合"""
+    result = set()
+    if not os.path.exists(OUT_OF_RANGE_FILE):
+        return result
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(OUT_OF_RANGE_FILE, read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if rows:
+            header = [str(c).strip() if c is not None else "" for c in rows[0]]
+            idx = header.index("inst_id") if "inst_id" in header else 0
+            for row in rows[1:]:
+                v = row[idx] if idx < len(row) else None
+                if v:
+                    result.add(str(v).strip())
+        wb.close()
+    except Exception as e:
+        print(f"[超出范围] 读取 {OUT_OF_RANGE_FILE} 失败: {e}")
+    return result
+def add_to_out_of_range(inst_id: str, current_price: float, range_high: float, range_low: float, reason: str = "超出程序运行计算的范围"):
+    """价格超出配置 [ref_low, ref_high] 计算范围时，将该币对记入同目录 xlsx 表（仅记一次）"""
+    if not inst_id:
+        return
+    if inst_id in load_out_of_range():
+        return
+    import openpyxl
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row_data = [inst_id, f"{current_price:.8g}", f"{range_high:.8g}", f"{range_low:.8g}", reason, now_str]
+    try:
+        if os.path.exists(OUT_OF_RANGE_FILE):
+            wb = openpyxl.load_workbook(OUT_OF_RANGE_FILE)
+            ws = wb.active
+        else:
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "超出范围"
+            ws.append(OUT_OF_RANGE_HEADER)
+        ws.append(row_data)
+        wb.save(OUT_OF_RANGE_FILE)
+        wb.close()
+        print(f"[超出范围] {inst_id} 已记入 {os.path.basename(OUT_OF_RANGE_FILE)}: 当前价 {current_price:.8g}, 范围 [{range_low:.8g}, {range_high:.8g}], 原因: {reason}")
+    except Exception as e:
+        print(f"[超出范围] 写入 {OUT_OF_RANGE_FILE} 失败: {e}")
 # ==================== OKX 持仓同步 ====================
 def refresh_positions_cache(force=False):
     global _positions_cache
@@ -572,7 +603,6 @@ def refresh_positions_cache(force=False):
                 }
         _positions_cache["data"] = api_positions
         _positions_cache["timestamp"] = now
-
         local_pos = load_positions()
         for inst_id in list(local_pos.keys()):
             if inst_id not in api_positions:
@@ -605,15 +635,12 @@ def refresh_positions_cache(force=False):
         save_positions(local_pos)
     except Exception:
         pass
-
 def get_api_positions() -> Dict[str, Dict]:
     refresh_positions_cache()
     return _positions_cache["data"]
-
 def has_api_position(inst_id: str) -> bool:
     positions = get_api_positions()
     return inst_id in positions and positions[inst_id].get("position_qty", 0) > 0
-
 # ==================== 配置加载 ====================
 def load_config() -> Tuple[Dict, Dict]:
     import openpyxl
@@ -624,7 +651,7 @@ def load_config() -> Tuple[Dict, Dict]:
         "total_funds": 1000000.0,
         "buy_ratio": 0.01,
         "cooldown_days": 7,
-        "profit_trigger": 0.05,
+        "profit_trigger": 0.065,
         "stop_loss": 0.015,
         "profit_step": 0.01,
         "break_alert_max": 4,
@@ -664,14 +691,13 @@ def load_config() -> Tuple[Dict, Dict]:
         except:
             pass
     return config, system_params
-
 # ==================== 多层次价格计算 ====================
 class PriceLevels:
     def __init__(self, high: float, low: float):
         self.high = high
         self.low = low
         self.update(high, low)
-    
+
     def update(self, high: float, low: float):
         self.high = high
         self.low = low
@@ -704,7 +730,7 @@ class PriceLevels:
         self.limit2_down = (self.limit1_mid + low) / 2
         self.limit3 = (self.limit2_down + low) / 2
         self.limit4 = (self.limit3 + low) / 2
-        
+
         self.buy_levels = {
             "pullback2_down": self.pullback2_down,
             "callback2_down": self.callback2_down,
@@ -723,7 +749,6 @@ class PriceLevels:
             "transition2_down": ("transition_up", "过渡"),
             "limit2_down": ("limit_up", "极限"),
         }
-
 # ==================== WebSocket 底层 ====================
 def recv_exact(sock, size):
     data = bytearray()
@@ -733,7 +758,6 @@ def recv_exact(sock, size):
             raise ConnectionError("连接已关闭")
         data.extend(chunk)
     return bytes(data)
-
 def build_ws_frame(payload: bytes, opcode: int = 0x1) -> bytes:
     fin = 0x80 | opcode
     mask = 0x80
@@ -747,16 +771,12 @@ def build_ws_frame(payload: bytes, opcode: int = 0x1) -> bytes:
     mask_key = os.urandom(4)
     masked = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
     return header + mask_key + masked
-
 def send_text(sock, text):
     sock.sendall(build_ws_frame(text.encode("utf-8"), opcode=0x1))
-
 def send_pong(sock, payload=b""):
     sock.sendall(build_ws_frame(payload, opcode=0xA))
-
 def send_ping(sock, payload=b""):
     sock.sendall(build_ws_frame(payload, opcode=0x9))
-
 def recv_ws_frame(sock):
     first, second = recv_exact(sock, 2)
     opcode = first & 0x0F
@@ -771,7 +791,6 @@ def recv_ws_frame(sock):
     if masked:
         payload = bytes(b ^ mask_key[i % 4] for i, b in enumerate(payload))
     return opcode, payload
-
 def _ws_handshake(host, port, path):
     raw = socket.create_connection((host, port), timeout=10)
     ctx = ssl.create_default_context()
@@ -799,10 +818,18 @@ def _ws_handshake(host, port, path):
     if headers.get("sec-websocket-accept") != expected:
         raise ConnectionError("握手校验失败")
     return sock
-
 def connect_okx_ws():
-    return _ws_handshake(OKX_WS_HOST, OKX_WS_PORT, OKX_WS_PATH)
-
+    """连接 OKX 公共 WebSocket，8443 失败时自动回退 443 端口，提升连接成功率"""
+    last_err = None
+    for port in (OKX_WS_PORT, 443):
+        try:
+            return _ws_handshake(OKX_WS_HOST, port, OKX_WS_PATH)
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err is not None:
+        raise last_err
+    raise ConnectionError("OKX WebSocket 连接失败")
 # ==================== 工具函数 ====================
 def check_okx_available(inst_id):
     for inst_type in ("SPOT", "SWAP"):
@@ -816,17 +843,14 @@ def check_okx_available(inst_id):
         except Exception:
             pass
     return False
-
 # ==================== OKX REST 交易客户端 ====================
 TRADE_MODE = "demo"
 TRADE_MODE_DESC = {
     "demo": "OKX模拟盘(API下单)",
     "live": "OKX实盘(API下单)",
 }
-
 class OkxTradeError(Exception):
     pass
-
 class OkxTradeClient:
     def __init__(self, api_key, api_secret, passphrase, simulated=True, logger=None):
         self.api_key = api_key
@@ -835,16 +859,13 @@ class OkxTradeClient:
         self.simulated = simulated
         self.logger = logger
         self._inst_cache = {}
-
     @staticmethod
     def _timestamp():
         now = datetime.now(timezone.utc)
         return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
-
     def _sign(self, ts, method, request_path, body):
         msg = (ts + method.upper() + request_path + (body or "")).encode("utf-8")
         return base64.b64encode(hmac.new(self.api_secret.encode("utf-8"), msg, hashlib.sha256).digest()).decode("utf-8")
-
     def _request(self, method, path, body_obj=None, query=None, auth=True, timeout=10):
         body = json.dumps(body_obj, separators=(",", ":")) if body_obj is not None else ""
         request_path = path
@@ -874,7 +895,6 @@ class OkxTradeClient:
         if str(payload.get("code")) != "0":
             raise OkxTradeError(f"code={payload.get('code')} msg={payload.get('msg')} data={payload.get('data')}")
         return payload
-
     def get_instrument(self, inst_id):
         if inst_id in self._inst_cache:
             return self._inst_cache[inst_id]
@@ -883,7 +903,6 @@ class OkxTradeClient:
         if info:
             self._inst_cache[inst_id] = info
         return info
-
     @staticmethod
     def _round_down(value, step):
         try:
@@ -896,7 +915,6 @@ class OkxTradeClient:
             return round(n * step_f, decimals)
         except Exception:
             return value
-
     def get_balance(self, ccy="USDT"):
         payload = self._request("GET", "/api/v5/account/balance", query={"ccy": ccy})
         for item in payload.get("data", []):
@@ -904,16 +922,13 @@ class OkxTradeClient:
                 if d.get("ccy") == ccy:
                     return float(d.get("availBal") or 0)
         return 0.0
-
     @staticmethod
     def _new_clordid():
         return f"okd{int(time.time() * 1000)}{os.urandom(2).hex()}"
-
     @staticmethod
     def _fmt_sz(value):
         s = f"{float(value):.12f}".rstrip("0").rstrip(".")
         return s if s else "0"
-
     def _place_order(self, inst_id, side, sz, tgt_ccy, cl_ord_id):
         body = {
             "instId": inst_id,
@@ -930,7 +945,6 @@ class OkxTradeClient:
         if str(data.get("sCode")) != "0":
             raise OkxTradeError(f"下单被拒 sCode={data.get('sCode')} sMsg={data.get('sMsg')}")
         return data.get("ordId", "")
-
     def _query_order(self, inst_id, ord_id=None, cl_ord_id=None):
         query = {"instId": inst_id}
         if ord_id:
@@ -941,7 +955,6 @@ class OkxTradeClient:
             return None
         payload = self._request("GET", "/api/v5/trade/order", query=query)
         return (payload.get("data") or [None])[0]
-
     def _wait_fill(self, inst_id, ord_id=None, cl_ord_id=None, tries=8, interval=0.5):
         last = None
         for _ in range(tries):
@@ -955,7 +968,6 @@ class OkxTradeClient:
                     return od
             time.sleep(interval)
         return last
-
     @staticmethod
     def _fill_result(od, side):
         avg_px = float(od.get("avgPx") or 0)
@@ -978,27 +990,23 @@ class OkxTradeClient:
         else:
             result["proceeds"] = gross_quote + fee if fee_ccy != base_ccy else gross_quote
         return result
-
     def _safe_query_by_clordid(self, inst_id, cl_ord_id):
         try:
             return self._query_order(inst_id, cl_ord_id=cl_ord_id)
         except Exception:
             return None
-
     def _log_error(self, msg):
         if self.logger:
             self.logger.error(msg)
         else:
             print(f"[OKX] {msg}")
-
     def market_buy_quote(self, inst_id, quote_amount):
         cl_ord_id = self._new_clordid()
         try:
+            # 注：OKX minSz 是币本位（基础币）最小下单量，而这里按计价货币（quote_ccy）市价下单，
+            # 直接拿计价金额与币本位最小量比较会产生单位错配，误判"低于最小下单量"而误加黑名单。
+            # 是否达标交由交易所下单接口校验，失败会走下方错误分类逻辑。
             info = self.get_instrument(inst_id)
-            if info:
-                min_sz = float(info.get("minSz") or 0)
-                if min_sz > 0 and quote_amount < min_sz:
-                    raise OkxTradeError(f"买入金额 {quote_amount:.2f} 低于最小下单量 {min_sz} {info.get('quoteCcy', '')}")
             ord_id = self._place_order(inst_id, "buy", self._fmt_sz(quote_amount), "quote_ccy", cl_ord_id)
         except Exception as e:
             od = self._safe_query_by_clordid(inst_id, cl_ord_id)
@@ -1013,7 +1021,6 @@ class OkxTradeClient:
             self._log_error(f"{inst_id} 买入未成交 ordId={ord_id} state={(od or {}).get('state')}")
             return None
         return self._fill_result(od, "buy")
-
     def market_sell_base(self, inst_id, qty):
         cl_ord_id = self._new_clordid()
         sz = qty
@@ -1040,7 +1047,6 @@ class OkxTradeClient:
             self._log_error(f"{inst_id} 卖出未成交 ordId={ord_id} state={(od or {}).get('state')}")
             return None
         return self._fill_result(od, "sell")
-
 # ==================== 余额获取 ====================
 def get_okx_balance(force_refresh=False) -> float:
     global _balance_cache
@@ -1056,7 +1062,6 @@ def get_okx_balance(force_refresh=False) -> float:
         return bal
     except Exception:
         return _balance_cache["value"]
-
 # ==================== 本地查看文件更新 ====================
 def _update_funds_for_view(balance: float):
     try:
@@ -1075,7 +1080,6 @@ def _update_funds_for_view(balance: float):
             writer.writerow(row)
     except Exception as e:
         print(f"[资金] 更新查看文件失败: {e}")
-
 # ==================== 状态持久化 ====================
 def load_positions() -> Dict[str, Dict]:
     rows = _read_csv(POSITIONS_FILE, POSITIONS_HEADER)
@@ -1122,7 +1126,6 @@ def load_positions() -> Dict[str, Dict]:
                 "max_loss_pct": float(row.get("max_loss_pct", 0) or 0),
             }
     return result
-
 def save_positions(positions: Dict[str, Dict]):
     rows = []
     for inst_id, data in positions.items():
@@ -1147,7 +1150,6 @@ def save_positions(positions: Dict[str, Dict]):
             "max_loss_pct": data.get("max_loss_pct", 0),
         })
     _write_csv_all(POSITIONS_FILE, POSITIONS_HEADER, rows)
-
 def load_cooldown() -> Dict[str, str]:
     rows = _read_csv(COOLDOWN_FILE, COOLDOWN_HEADER)
     result = {}
@@ -1156,10 +1158,8 @@ def load_cooldown() -> Dict[str, str]:
         if inst_id:
             result[inst_id] = row.get("cooldown_until", "")
     return result
-
 def save_cooldown_entry(inst_id: str, cooldown_until: str):
     _write_csv_row(COOLDOWN_FILE, COOLDOWN_HEADER, {"inst_id": inst_id, "sell_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "cooldown_until": cooldown_until})
-
 def load_high_low() -> Dict[str, Dict]:
     rows = _read_csv(HIGH_LOW_FILE, HIGH_LOW_HEADER)
     result = {}
@@ -1172,7 +1172,6 @@ def load_high_low() -> Dict[str, Dict]:
                 "last_update": row.get("last_update", "")
             }
     return result
-
 def save_high_low_entry(inst_id: str, high: float, low: float):
     rows = _read_csv(HIGH_LOW_FILE, HIGH_LOW_HEADER)
     found = False
@@ -1186,7 +1185,6 @@ def save_high_low_entry(inst_id: str, high: float, low: float):
     if not found:
         rows.append({"inst_id": inst_id, "all_time_high": str(high), "all_time_low": str(low), "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
     _write_csv_all(HIGH_LOW_FILE, HIGH_LOW_HEADER, rows)
-
 def load_pair_status() -> Dict[str, Dict]:
     rows = _read_csv(PAIR_STATUS_FILE, PAIR_STATUS_HEADER)
     result = {}
@@ -1207,7 +1205,6 @@ def load_pair_status() -> Dict[str, Dict]:
                 "profit_pct": float(row.get("profit_pct", 0) or 0),
             }
     return result
-
 def save_pair_status(inst_id: str, data: Dict):
     rows = _read_csv(PAIR_STATUS_FILE, PAIR_STATUS_HEADER)
     found = False
@@ -1245,16 +1242,12 @@ def save_pair_status(inst_id: str, data: Dict):
             "profit_pct": data.get("profit_pct", 0),
         })
     _write_csv_all(PAIR_STATUS_FILE, PAIR_STATUS_HEADER, rows)
-
 def load_buy_queue() -> List[Dict]:
     return _read_csv(BUY_QUEUE_FILE, BUY_QUEUE_HEADER)
-
 def save_buy_queue(rows: List[Dict]):
     _write_csv_all(BUY_QUEUE_FILE, BUY_QUEUE_HEADER, rows)
-
 def save_trade(row: Dict):
     _write_csv_row(TRADE_FILE, TRADE_HEADER, row)
-
 # ==================== 初始化 OKX 客户端 ====================
 def init_okx_client(trade_mode, logger):
     global _okx_client, TRADE_MODE
@@ -1266,14 +1259,12 @@ def init_okx_client(trade_mode, logger):
         logger.warn("实盘模式未设置 OKX_LIVE_CONFIRM=YES，自动降级为模拟盘 demo", "startup")
         mode = "demo"
     TRADE_MODE = mode
-
     api_key = os.getenv("OKX_API_KEY", "").strip()
     api_secret = os.getenv("OKX_API_SECRET", "").strip()
     passphrase = os.getenv("OKX_API_PASSPHRASE", "").strip()
     if not (api_key and api_secret and passphrase):
         logger.error("OKX API 凭证不完整，请检查 .env 文件", "startup")
         sys.exit(1)
-
     _okx_client = OkxTradeClient(api_key, api_secret, passphrase, simulated=(mode == "demo"), logger=logger)
     try:
         bal = _okx_client.get_balance("USDT")
@@ -1286,7 +1277,6 @@ def init_okx_client(trade_mode, logger):
         sys.exit(1)
     logger.info(f"交易模式: {TRADE_MODE_DESC[mode]}", "startup")
     return mode
-
 # ==================== 币对状态管理（核心逻辑） ====================
 class SymbolState:
     def __init__(self, inst_id, ref_high, ref_low, logger, system_params=None):
@@ -1296,19 +1286,21 @@ class SymbolState:
         self.total_funds = self.params.get("total_funds", 1000000)
         self.min_buy_amount = float(os.getenv("MIN_BUY_AMOUNT", "100"))
         self.client = _okx_client
-
         # 加载黑名单（常规 + 未知异常）和观察列表
         self.blacklist = load_blacklist()
         self.unknown_blacklist = load_unknown_blacklist()
         self.observe_list = load_observe_list()
-
+        # v5.5：配置计算范围（来自 okx_ding_ok_config.xlsx 币对配置的最高价/最低价，不随行情更新）
+        self.range_high = float(ref_high)
+        self.range_low = float(ref_low)
+        # v5.5：价格超出配置计算范围的币对（已记入同目录 xlsx 并剔除买入）
+        self.out_of_range = self.inst_id in load_out_of_range()
         # 买入信号相关（新逻辑）
         self.buy_signal_activated = False
         self.buy_signal_lowest_price = 0.0
         self.buy_signal_buy_level = ""
         self.buy_signal_buy_price = 0.0
         self.buy_signal_attempt_time = 0.0  # 上次尝试买入时间（防频繁尝试）
-
         self._okx_available = False
         if inst_id in self.blacklist or inst_id in self.unknown_blacklist:
             self.logger.info(f"{inst_id} 在黑名单中，自动跳过", "startup")
@@ -1328,19 +1320,18 @@ class SymbolState:
             add_to_blacklist(inst_id, "启动检测不可交易")
         elif not self._okx_available:
             self.logger.info(f"{inst_id} 已在黑名单/观察列表中，跳过", "startup")
-
+        if self.out_of_range:
+            self.logger.info(f"{inst_id} 价格已超出计算范围 [{self.range_low:.8g}, {self.range_high:.8g}]，不参与交易（记录见 {os.path.basename(OUT_OF_RANGE_FILE)}）", "startup")
         # 加载本地状态
         self.positions = load_positions()
         self.cooldown = load_cooldown()
         self.high_low = load_high_low()
         self.pair_status = load_pair_status()
         self.buy_queue = load_buy_queue()
-
         hl = self.high_low.get(inst_id, {})
         self.high = hl.get("all_time_high", ref_high)
         self.low = hl.get("all_time_low", ref_low)
         self.levels = PriceLevels(self.high, self.low)
-
         # 持仓状态
         pos = self.positions.get(inst_id, {})
         self.has_position = pos.get("position_qty", 0) > 0
@@ -1360,7 +1351,6 @@ class SymbolState:
             self.max_loss_pct = float(pos.get("max_loss_pct", 0) or 0)
         except Exception:
             self.max_loss_pct = 0.0
-
         # 配对状态
         pair = self.pair_status.get(inst_id, {})
         self.is_paired = pair.get("is_paired", False)
@@ -1370,13 +1360,9 @@ class SymbolState:
         self.is_sold = pair.get("is_sold", False)
         self.sell_time = pair.get("sell_time", "")
         self.sell_reason = pair.get("sell_reason", "")
-
         self._last_profit = 0.0
         self._last_profit_pct = 0.0
         self._balance_insufficient_until = 0.0
-        # v5.1：持有期最大亏损比例（回本清仓依据），负数表示亏损
-        self.max_loss_pct = 0.0
-
         self._sync_buy_queue()
         self.below_pullback_since = None
         self.below_callback_since = None
@@ -1391,7 +1377,6 @@ class SymbolState:
         self._last_processed_price = 0.0
         self._last_processed_ts = 0.0
         self._profit_notified_steps = set()
-
         # 同步 API 持仓
         if self.client is not None and self._okx_available:
             refresh_positions_cache(force=True)
@@ -1404,8 +1389,13 @@ class SymbolState:
                     self.position_price = api_pos.get("position_price", 0)
                     self.position_amount = api_pos.get("position_amount", 0)
                     self._save_state()
-
     def _sync_buy_queue(self):
+        # v5.5：超出计算范围的币，从买入列表中剔除且不再加回
+        if self.out_of_range:
+            if any(r.get("inst_id") == self.inst_id for r in self.buy_queue):
+                self.logger.info(f"{self.inst_id} 价格超出计算范围，从买入列表剔除", "startup")
+                self._remove_from_buy_queue()
+            return
         # v5.1：常规黑名单 / 未知异常黑名单中的币，从买入列表中剔除
         if self.inst_id in self.blacklist or self.inst_id in self.unknown_blacklist:
             if any(r.get("inst_id") == self.inst_id for r in self.buy_queue):
@@ -1446,7 +1436,6 @@ class SymbolState:
             changed = True
         if changed:
             save_buy_queue(self.buy_queue)
-
     def _is_in_cooldown(self):
         until = self.cooldown.get(self.inst_id, "")
         if until:
@@ -1460,9 +1449,8 @@ class SymbolState:
                 save_buy_queue(self.buy_queue)
                 break
         return False
-
     def _update_check_level(self, profit_pct):
-        if profit_pct >= 0.05:
+        if profit_pct >= 0.065:
             self.check_level = "T0"
         elif profit_pct > 0:
             self.check_level = "T1"
@@ -1471,8 +1459,10 @@ class SymbolState:
         else:
             self.check_level = "T3"
         self.last_check_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     def _can_buy(self):
+        # v5.5：价格超出配置计算范围，禁止买入（优先级最高）
+        if self.out_of_range:
+            return False, "价格超出程序运行计算的范围"
         if not self._okx_available:
             return False, "币对在黑名单/不可交易"
         # v5.1：下单前检查两类黑名单（常规 + 未知异常），黑名单币从买入列表剔除
@@ -1507,10 +1497,9 @@ class SymbolState:
         if self.is_paired and not self.is_sold:
             return False, f"已配对未卖出 ({self.pair_type})"
         return True, ""
-
     def _can_sell(self, require_profit: bool = True, price: float = None):
-        """卖出资格检查（v5.1）：
-        require_profit=True 时，必须盈利 ≥5% 才允许卖出（回本清仓传 False 豁免）
+        """卖出资格检查
+        require_profit=True：普通场景，要求保底盈利；False用于亏损超5%回本豁免场景
         """
         if not self.has_position:
             return False, "无持仓"
@@ -1520,7 +1509,6 @@ class SymbolState:
             if profit_pct < 0.05:
                 return False, f"盈利未达5% (当前 {profit_pct*100:.2f}%)"
         return True, ""
-
     def _get_buy_level(self, price):
         """返回当前价格下最佳买点（价格低于该买点且最接近）"""
         buy_keys = ["pullback2_down", "callback2_down", "transition2_down", "limit2_down"]
@@ -1533,24 +1521,20 @@ class SymbolState:
                     best_price = level
                     best_key = key
         return best_key, best_price
-
     def _execute_buy(self, price, reason, buy_key, sell_key, pair_name):
         """执行买入，包含错误分类和重试逻辑"""
         balance = get_okx_balance(force_refresh=True)
         if balance < 110:
             self.logger.info(f"{self.inst_id} 账户余额 {balance:.2f} USDT 低于 110，跳过买入")
             return None
-
         buy_level = getattr(self.levels, buy_key)
         if price >= buy_level:
             self.logger.debug(f"{self.inst_id} 当前价 {price:.8g} 不小于买点 {buy_level:.8g}，跳过")
             return None
-
         can, msg = self._can_buy()
         if not can:
             self.logger.debug(f"{self.inst_id} 买入跳过: {msg}")
             return None
-
         raw_amount = balance * self.params.get("buy_ratio", 0.01)
         buy_amount = max(raw_amount, self.min_buy_amount)
         if buy_amount > balance:
@@ -1558,14 +1542,11 @@ class SymbolState:
         if buy_amount <= 0:
             self.logger.info(f"{self.inst_id} 买入金额为0，跳过")
             return None
-
         fill = self.client.market_buy_quote(self.inst_id, buy_amount)
         now = time.time()
-
         if fill is None:
             self.logger.error(f"{self.inst_id} API买入失败（未知错误），不再重试")
             return self._blacklist_unknown_error(reason="未知错误（返回None）")
-
         if isinstance(fill, dict) and "error" in fill:
             error_msg = fill["error"]
             self.logger.error(f"{self.inst_id} API买入失败: {error_msg}")
@@ -1586,14 +1567,12 @@ class SymbolState:
             else:
                 # 其他未知错误 → 未知异常黑名单，不再尝试
                 return self._blacklist_unknown_error(reason=error_msg[:100])
-
         # 成交成功
         price = fill["price"]
         qty = fill["qty"]
         buy_amount = fill["cost"]
         reason = f"{reason} | ordId={fill.get('ord_id', '')} fee={fill.get('fee', 0):.8g}{fill.get('fee_ccy', '')}"
         self.logger.info(f"{self.inst_id} API买入成交: ordId={fill.get('ord_id')} 均价 {price:.8g} 数量 {qty:.8g} 花费 {buy_amount:.2f}", "buy_execute")
-
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.has_position = True
         self.position_price = price
@@ -1618,18 +1597,15 @@ class SymbolState:
         self.max_loss_pct = 0.0
         self._profit_notified_steps = set()
         self._last_processed_price = price
-
         # 买入成功后重置买入信号
         self.buy_signal_activated = False
         self.buy_signal_lowest_price = 0.0
         self.buy_signal_buy_level = ""
         self.buy_signal_buy_price = 0.0
-
         _update_funds_for_view(get_okx_balance(force_refresh=True))
         refresh_positions_cache(force=True)
         self._remove_from_buy_queue()
         self._save_state(force=True)
-
         save_trade({
             "timestamp": now_str,
             "inst_id": self.inst_id,
@@ -1643,12 +1619,10 @@ class SymbolState:
             "profit_pct": "0",
             "reason": reason
         })
-
         msg = f"{self.inst_id} {reason} @ {price:.8g}, 金额 {buy_amount:.2f}, 数量 {qty:.8g}, 买点: {buy_key}"
         self.logger.info(msg, "buy_execute")
         self._push_notify(f"💰 买入\n\n{self.inst_id}\n{pair_name}买点: {buy_key}\n价格: {price:.8g}\n金额: {buy_amount:.2f}")
         return msg
-
     def _blacklist_unknown_error(self, reason: str):
         """未知错误：直接加入未知异常黑名单，不再尝试，从买入列表剔除（v5.3）"""
         self.logger.warn(f"{self.inst_id} 未知错误，加入未知异常黑名单并移除买入队列: {reason[:100]}")
@@ -1658,17 +1632,14 @@ class SymbolState:
         self._remove_from_buy_queue()
         self._push_notify(f"🚫 已加入未知异常黑名单\n\n{self.inst_id}\n原因: {reason[:80]}")
         return None
-
     def _remove_from_buy_queue(self):
         self.buy_queue = [r for r in self.buy_queue if r.get("inst_id") != self.inst_id]
         save_buy_queue(self.buy_queue)
-
     def _execute_sell(self, price, reason, require_profit: bool = True):
         can, msg = self._can_sell(require_profit, price)
         if not can:
             self.logger.debug(f"{self.inst_id} 卖出跳过: {msg}")
             return None
-
         qty = self.position_qty
         fill = self.client.market_sell_base(self.inst_id, qty)
         if not fill or fill.get("qty", 0) <= 0:
@@ -1682,7 +1653,6 @@ class SymbolState:
         amount = fill["proceeds"]
         reason = f"{reason} | ordId={fill.get('ord_id', '')} fee={fill.get('fee', 0):.8g}{fill.get('fee_ccy', '')}"
         self.logger.info(f"{self.inst_id} API卖出成交: ordId={fill.get('ord_id')} 均价 {price:.8g} 数量 {qty:.8g} 到手 {amount:.2f}", "sell_execute")
-
         profit = amount - self.position_amount
         profit_pct = profit / self.position_amount * 100 if self.position_amount > 0 else 0
         cost_price = self.position_price
@@ -1691,10 +1661,8 @@ class SymbolState:
         cached_pair_sell_line_price = self.pair_sell_line_price
         cached_buy_time = self.buy_time
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
         self._last_profit = profit
         self._last_profit_pct = profit_pct
-
         self.has_position = False
         self.position_price = 0
         self.position_qty = 0
@@ -1712,23 +1680,19 @@ class SymbolState:
         self.check_level = ""
         self.last_check_time = ""
         self._profit_notified_steps = set()
-
         cooldown_days = self.params.get("cooldown_days", 7)
         cooldown_until = (datetime.now() + timedelta(days=cooldown_days)).strftime("%Y-%m-%d %H:%M:%S")
         save_cooldown_entry(self.inst_id, cooldown_until)
         self.cooldown[self.inst_id] = cooldown_until
         self._add_to_buy_queue("静默期_排除")
-
         self.pair_buy_price = cost_price
         self.pair_buy_time = cached_buy_time
         self.pair_sell_line_price = cached_pair_sell_line_price
         self.pair_type = cached_pair_type
         self.pair_sell_line = cached_pair_sell_line
-
         _update_funds_for_view(get_okx_balance(force_refresh=True))
         refresh_positions_cache(force=True)
         self._save_state(force=True)
-
         save_trade({
             "timestamp": now_str,
             "inst_id": self.inst_id,
@@ -1742,12 +1706,10 @@ class SymbolState:
             "profit_pct": f"{profit_pct:.6f}",
             "reason": reason
         })
-
         msg = f"{self.inst_id} {reason} @ {price:.8g}, 数量 {qty:.8g}, 盈亏 {profit:.2f} ({profit_pct:.2f}%)"
         self.logger.info(msg, "sell_execute")
         self._push_notify(f"💸 卖出\n\n{self.inst_id}\n{reason}\n价格: {price:.8g}\n盈亏: {profit:.2f} ({profit_pct:.2f}%)")
         return msg
-
     def _add_to_buy_queue(self, status):
         for row in self.buy_queue:
             if row.get("inst_id") == self.inst_id:
@@ -1757,19 +1719,28 @@ class SymbolState:
                 return
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.buy_queue.append({
-            "inst_id": self.inst_id, 
-            "status": status, 
-            "ref_high": str(self.levels.high), 
-            "ref_low": str(self.levels.low), 
-            "add_time": now_str, 
+            "inst_id": self.inst_id,
+            "status": status,
+            "ref_high": str(self.levels.high),
+            "ref_low": str(self.levels.low),
+            "add_time": now_str,
             "last_check_time": now_str
         })
         save_buy_queue(self.buy_queue)
-
     def _check_take_profit(self, price):
         if not self.has_position or self.position_price <= 0:
             return None
         profit_pct = (price - self.position_price) / self.position_price
+
+        # 新增：止盈激活后，如果浮盈回落低于6.5%，撤销止盈激活，防止毛刺虚假激活
+        if self.profit_triggered and profit_pct < 0.065:
+            self.logger.info(f"{self.inst_id} 当前盈利回落至6.5%以下，关闭止盈激活，profit_pct={profit_pct*100:.2f}%","profit_trigger")
+            self.profit_triggered = False
+            self.stop_price = 0
+            self._update_check_level(profit_pct)
+            self._save_state(force=True)
+            return None
+
         if price > self.peak_price:
             self.peak_price = price
 
@@ -1778,14 +1749,16 @@ class SymbolState:
             self.logger.info(f"{self.inst_id} 盈利 ≥20%，立即清仓", "profit_trigger")
             return self._execute_sell(price, f"盈利率 {profit_pct*100:.1f}% ≥20%，清仓")
 
-        # v5.1：动态止损价 = max(峰值回撤, 成本+5%)，确保清仓时盈利 ≥5%
+        # v5.4_fix：动态止损价 = max(峰值回撤, 成本+5%)，保证清仓最低5%盈利
         new_stop = self.peak_price * (1 - stop_ratio)
         min_stop = self.position_price * 1.05
         if new_stop < min_stop:
             new_stop = min_stop
         if new_stop > self.stop_price:
             self.stop_price = new_stop
-        if profit_pct >= 0.05 and not self.profit_triggered:
+
+        # 止盈激活条件改为盈利 >=6.5%
+        if profit_pct >= 0.065 and not self.profit_triggered:
             self.profit_triggered = True
             self.check_level = "T0"
             self._push_notify(f"📈 止盈激活\n\n{self.inst_id}\n盈利: {profit_pct*100:.2f}%\n峰值: {self.peak_price:.8g}\n止盈价: {self.stop_price:.8g}")
@@ -1794,10 +1767,8 @@ class SymbolState:
 
         if self.profit_triggered and price <= self.stop_price:
             self.logger.info(f"{self.inst_id} 触发止盈清仓: 当前价 {price:.8g} ≤ 止盈价 {self.stop_price:.8g}", "stop_loss_trigger")
-            return self._execute_sell(price, f"止盈清仓 (峰值 {self.peak_price:.8g}, 止损 {stop_ratio*100:.1f}%)")
+            return self._execute_sell(price, f"止盈清仓 (峰值 {self.peak_price:.8g}, 回撤 {stop_ratio*100:.1f}%)")
         return None
-
-    # 移除了原有的 check_buy_queue 和 check_near_price，因为新逻辑在 update_price 中直接处理
 
     def update_price(self, price, ts):
         alerts = []
@@ -1805,7 +1776,6 @@ class SymbolState:
             return alerts
         self._last_processed_price = price
         self._last_processed_ts = ts
-
         # 更新最高/最低
         if price > self.high:
             self.high = price
@@ -1819,14 +1789,23 @@ class SymbolState:
             self.last_new_low_ts = ts
             save_high_low_entry(self.inst_id, self.high, self.low)
             alerts.append(f"创新低 {price:.8g}")
-
+        # ========== v5.5：价格超出配置计算范围检测 ==========
+        # 当前价不在 okx_ding_ok_config.xlsx 配置的 [ref_low, ref_high] 区间内时，
+        # 记入同目录 xlsx 表（原因：超出程序运行计算的范围）并从买入列表剔除，不再买入
+        if not self.out_of_range and (price > self.range_high or price < self.range_low):
+            self.out_of_range = True
+            add_to_out_of_range(self.inst_id, price, self.range_high, self.range_low)
+            self._remove_from_buy_queue()
+            self._push_notify(f"🚫 超出计算范围\n\n{self.inst_id}\n当前价: {price:.8g}\n计算范围: [{self.range_low:.8g}, {self.range_high:.8g}]\n已从买入列表剔除，原因：超出程序运行计算的范围")
+            self.logger.warn(f"{self.inst_id} 当前价 {price:.8g} 超出计算范围 [{self.range_low:.8g}, {self.range_high:.8g}]，已记入 {os.path.basename(OUT_OF_RANGE_FILE)} 并从买入列表剔除", "startup")
+            alerts.append(f"超出计算范围已剔除")
         # ========== 持仓状态：止盈和卖点 ==========
         if self.has_position:
             profit_pct = (price - self.position_price) / self.position_price if self.position_price > 0 else 0
             # v5.1：记录持有期最大亏损
             if profit_pct < self.max_loss_pct:
                 self.max_loss_pct = profit_pct
-            # v5.1：亏损超5%后回本即清仓（不要求盈利5%，回本清仓豁免5%门槛）
+            # 亏损超5%后回本即清仓（不受配对卖点、动态止盈约束）
             if self.max_loss_pct <= -0.05 and profit_pct >= 0 and not self.profit_triggered:
                 self.logger.info(f"{self.inst_id} 亏损超5%后回本，立即清仓", "stop_loss_trigger")
                 result = self._execute_sell(price, f"回本清仓 (最大亏损 {self.max_loss_pct*100:.2f}%)", require_profit=False)
@@ -1842,21 +1821,30 @@ class SymbolState:
                     self._save_state(force=True)
                     return alerts
 
-            # 卖点触发
+            # ========= 配对卖点逻辑 v5.4_fix =========
             if self.is_paired and not self.is_sold:
                 sell_price = self.pair_sell_line_price
                 if price >= sell_price:
-                    result = self._execute_sell(price, f"{self.pair_type}卖点 {self.pair_sell_line} 触发")
-                    if result:
-                        alerts.append(f"{self.pair_type}卖点清仓 @ {price:.8g}")
-                        self._save_state(force=True)
-                        return alerts
+                    current_profit_pct = (price - self.position_price) / self.position_price if self.position_price > 0 else 0
+                    is_loss_recovery_scenario = (self.max_loss_pct <= -0.05)
+                    if is_loss_recovery_scenario:
+                        # 历史最大亏损超过5%：碰到配对卖点只要回本即可卖出
+                        if current_profit_pct >= 0:
+                            result = self._execute_sell(price, f"{self.pair_type}卖点 {self.pair_sell_line}触发(亏损超5%回本豁免)", require_profit=False)
+                            if result:
+                                alerts.append(f"{self.pair_type}卖点清仓(回本豁免) @ {price:.8g}")
+                                self._save_state(force=True)
+                                return alerts
+                        else:
+                            self.logger.debug(f"{self.inst_id}到达配对卖点，历史有>5%亏损，但尚未回本，跳过卖出，当前盈亏{current_profit_pct*100:.2f}%")
+                    else:
+                        # 普通持仓：到达配对卖点不直接卖出，交给动态止盈回撤逻辑离场
+                        self.logger.debug(f"{self.inst_id}到达配对卖点 {self.pair_sell_line}，普通持仓，等待动态止盈回撤离场，当前盈利 {current_profit_pct*100:.2f}%")
 
         # ========== 无持仓：买入信号逻辑 ==========
-        if not self.has_position and not self._is_in_cooldown() and self.inst_id not in self.observe_list and self.inst_id not in self.blacklist and self.inst_id not in self.unknown_blacklist:
+        if not self.has_position and not self.out_of_range and not self._is_in_cooldown() and self.inst_id not in self.observe_list and self.inst_id not in self.blacklist and self.inst_id not in self.unknown_blacklist:
             # 获取当前价格对应的最佳买点（价格低于买点）
             buy_key, buy_level = self._get_buy_level(price)
-
             # 处理买入信号激活/取消
             if buy_key is not None:
                 # 价格跌破买点
@@ -1883,7 +1871,6 @@ class SymbolState:
                         self.buy_signal_lowest_price = 0.0
                         self.buy_signal_buy_level = ""
                         self.buy_signal_buy_price = 0.0
-
             # 检查是否满足买入条件：信号激活 && 反弹1% && 价格仍低于买点
             if self.buy_signal_activated:
                 # 防止过于频繁尝试（至少间隔30秒）
@@ -1913,11 +1900,9 @@ class SymbolState:
                     else:
                         # 条件不满足，不做操作
                         pass
-
         # 保存状态（常规）
         self._save_state()
         return alerts
-
     def _save_state(self, force: bool = False):
         """保存状态（v5.2 优化：常规 tick 节流 5 秒落盘，关键事件传 force=True 即时保存）"""
         if not force:
@@ -1955,7 +1940,6 @@ class SymbolState:
         else:
             positions.pop(self.inst_id, None)
         save_positions(positions)
-
         if self.is_paired or self.is_sold:
             payload = {
                 "pair_type": self.pair_type,
@@ -1976,10 +1960,8 @@ class SymbolState:
             rows = _read_csv(PAIR_STATUS_FILE, PAIR_STATUS_HEADER)
             rows = [r for r in rows if r.get("inst_id") != self.inst_id]
             _write_csv_all(PAIR_STATUS_FILE, PAIR_STATUS_HEADER, rows)
-
     def _push_notify(self, text):
         push_notify(text)
-
 # ==================== 行情引擎 ====================
 class MarketEngine:
     def __init__(self, logger, system_params=None):
@@ -1988,7 +1970,6 @@ class MarketEngine:
         self.states = {}
         self.lock = threading.Lock()
         self._last_buy_queue_check = 0
-
     def add_state(self, inst_id, ref_high, ref_low):
         state = SymbolState(inst_id, ref_high, ref_low, self.logger, self.params)
         self.states[inst_id] = state
@@ -2034,7 +2015,6 @@ class MarketEngine:
         if inst_id in cooldown:
             state.cooldown[inst_id] = cooldown[inst_id]
         state._sync_buy_queue()
-
     def on_trade(self, inst_id, price, ts):
         with self.lock:
             state = self.states.get(inst_id)
@@ -2047,23 +2027,24 @@ class MarketEngine:
                 self.logger.info(f"[{inst_id}] " + " | ".join(key), "trade_event")
             else:
                 self.logger.debug(f"[{inst_id}] " + " | ".join(alerts))
-
     def _check_buy_queue_all(self):
         # 注意：现在买入逻辑由 update_price 中的反弹机制触发，此函数仅用于手动触发检查（如有需求）
         self.logger.info("执行买入队列批量检查（备用）", "config_load")
         # 由于新逻辑已自动处理，这里不再重复执行
-
 # ==================== OKX 行情流 ====================
 def subscribe_okx_trades(sock, inst_ids):
     payload = {"op": "subscribe", "args": [{"channel": "trades", "instId": inst_id} for inst_id in inst_ids]}
     send_text(sock, json.dumps(payload, separators=(",", ":")))
-
 def handle_okx_message(message, engine):
-    if message == "pong":
+    msg = (message or "").strip()
+    # OKX 心跳回复可能是 "pong"（带引号 JSON 字符串）或 pong（裸文本），均需忽略
+    if msg in ("pong", '"pong"', "ping", '"ping"'):
         return
     try:
-        data = json.loads(message)
-    except:
+        data = json.loads(msg)
+    except Exception:
+        return
+    if not isinstance(data, dict):
         return
     if data.get("event") == "subscribe":
         return
@@ -2080,7 +2061,6 @@ def handle_okx_message(message, engine):
             continue
         ts = int(trade.get("ts", time.time() * 1000)) / 1000
         engine.on_trade(inst_id, price, ts)
-
 def stream_okx(engine, inst_ids):
     while True:
         sock = None
@@ -2115,7 +2095,6 @@ def stream_okx(engine, inst_ids):
         finally:
             if sock:
                 sock.close()
-
 # ==================== 主函数 ====================
 def main():
     print("=" * 60)
@@ -2123,9 +2102,7 @@ def main():
     print(f"工作目录: {BASE_DIR}")
     print(f"数据目录: {DATA_DIR}")
     print("=" * 60)
-
     logger = Logger(LOG_FILE)
-
     # 推送通道配置（.env）：NOTIFY_CHANNEL = dingtalk / feishu / both / none
     notify_channel = os.getenv("NOTIFY_CHANNEL", "").strip().lower() or "dingtalk"
     ding_webhook = os.getenv("DINGTALK_WEBHOOK_okx", "").strip()
@@ -2137,18 +2114,15 @@ def main():
         logger.info(f"消息推送已启用: {notify_channel}", "startup")
     else:
         logger.warn("消息推送未配置（NOTIFY_CHANNEL=none），仅终端输出", "startup")
-
     try:
         config, system_params = load_config()
         logger.info(f"加载配置成功: {len(config)} 个币对", "config_load")
     except Exception as e:
         logger.error(f"配置加载失败: {e}", "config_load")
         sys.exit(1)
-
     if not config:
         logger.error("没有启用的币对", "config_load")
         sys.exit(1)
-
     trade_mode_cfg = os.getenv("OKX_TRADE_MODE", "").strip() or str(system_params.get("trade_mode", "demo"))
     init_okx_client(trade_mode_cfg, logger)
     print(f"交易模式: {TRADE_MODE_DESC[TRADE_MODE]}")
@@ -2156,9 +2130,7 @@ def main():
     print(f"单笔最小买入金额: {min_amt:.2f} USDT")
     cooldown_days = int(os.getenv("COOLDOWN_DAYS", system_params.get("cooldown_days", 7)))
     print(f"静默期天数: {cooldown_days} 天")
-
     engine = MarketEngine(logger, system_params)
-
     blacklist = load_blacklist()
     if blacklist:
         logger.info(f"加载黑名单: {len(blacklist)} 个币对", "startup")
@@ -2169,7 +2141,11 @@ def main():
         logger.info(f"加载待观察列表: {len(observe_list)} 个币对", "startup")
         for o in observe_list:
             print(f"  待观察: {o}")
-
+    out_of_range_set = load_out_of_range()
+    if out_of_range_set:
+        logger.info(f"加载超出计算范围列表: {len(out_of_range_set)} 个币对", "startup")
+        for o in sorted(out_of_range_set):
+            print(f"  超出计算范围: {o}")
     okx_inst_ids = []
     logger.info("初始化币对状态...", "startup")
     for inst_id, data in config.items():
@@ -2186,37 +2162,30 @@ def main():
             print(f"{inst_id}: OKX 可交易")
         else:
             print(f"{inst_id}: OKX 不可交易（已排除）")
-
     api_pos = get_api_positions()
     if api_pos:
         print("\n当前 OKX 现货持仓:")
         for inst_id, data in api_pos.items():
             print(f"  {inst_id}: 数量 {data['position_qty']:.8g}, 成本 {data['position_price']:.8g}")
-
     positions = load_positions()
     for inst_id, data in positions.items():
         print(f"恢复持仓: {inst_id} 数量 {data.get('position_qty', 0):.8g} @ {data.get('position_price', 0):.8g}")
-
     queue = load_buy_queue()
     pending = [r for r in queue if r.get("status") == "待买入"]
     print(f"买入队列: {len(pending)} 个币对待买入")
     print(f"OKX 账户 USDT 余额: {get_okx_balance(force_refresh=True):.2f}")
-
     if not okx_inst_ids:
         logger.error("没有可交易的币对，退出", "startup")
         sys.exit(1)
-
     t = threading.Thread(target=stream_okx, args=(engine, okx_inst_ids), daemon=True)
     t.start()
     logger.info(f"OKX 行情线程启动: {len(okx_inst_ids)} 个币对", "startup")
-
     logger.info("=" * 60, "startup")
     logger.info("系统运行中，按 Ctrl+C 停止", "startup")
     logger.info("买入规则：价格跌破买点后，从最低点反弹1%时买入（且价格仍低于买点）", "startup")
-    logger.info("卖出规则：卖点/止盈清仓须盈利≥5%；亏损超5%回本即清仓；动态止损按上涨幅度回撤清仓", "startup")
+    logger.info("卖出规则(v5.4_fix)：普通持仓盈利≥6.5%激活动态止盈，按峰值回撤离场，保底清仓盈利5%；盈利≥20%直接清仓；持仓历史最大亏损>5%可回本即清仓", "startup")
     logger.info("检查频率: T0(实时) T1(1分钟) T2(15分钟) T3(30分钟)", "startup")
     logger.info("=" * 60, "startup")
-
     try:
         while True:
             time.sleep(1)
@@ -2229,7 +2198,5 @@ def main():
             NOTIFY_POOL.shutdown(wait=False)  # 不等待后台推送任务，立即退出
         except Exception:
             pass
-
 if __name__ == "__main__":
     main()
-
