@@ -1,0 +1,2 @@
+﻿inst_id,pair_type,is_paired,buy_price,buy_time,sell_line,sell_line_price,is_sold,sell_time,sell_reason,profit,profit_pct
+CSPR-USDT,,False,0.002174,2026-10-22 19:19:11,,0,True,2026-10-23 02:11:01,"破高位中间清仓 (买入层 [0.0012207031, 0.0024414062]) | ordId=4032795141609750528 fee=-0.0017048014USDT",-0.0847818488122,-3.837892

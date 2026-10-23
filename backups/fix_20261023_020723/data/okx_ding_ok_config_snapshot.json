@@ -1,0 +1,503 @@
+{
+ "config": {
+  "2Z-USDT": {
+   "ref_high": 0.0502,
+   "ref_low": 0.0251
+  },
+  "A-USDT": {
+   "ref_high": 0.098225,
+   "ref_low": 0.0491125
+  },
+  "ACH-USDT": {
+   "ref_high": 0.00733375,
+   "ref_low": 0.003666875
+  },
+  "AEVO-USDT": {
+   "ref_high": 0.027740234375,
+   "ref_low": 0.0138701171875
+  },
+  "AI-USDT": {
+   "ref_high": 0.02147,
+   "ref_low": 0.010735
+  },
+  "ALGO-USDT": {
+   "ref_high": 0.1184375,
+   "ref_low": 0.05921875
+  },
+  "ANIME-USDT": {
+   "ref_high": 0.0039375,
+   "ref_low": 0.00196875
+  },
+  "API3-USDT": {
+   "ref_high": 0.3375,
+   "ref_low": 0.16875
+  },
+  "ARG-USDT": {
+   "ref_high": 0.0721875,
+   "ref_low": 0.03609375
+  },
+  "ARKM-USDT": {
+   "ref_high": 0.1691875,
+   "ref_low": 0.08459375
+  },
+  "ASP-USDT": {
+   "ref_high": 0.0172125,
+   "ref_low": 0.00860625
+  },
+  "ASTER-USDT": {
+   "ref_high": 0.7035,
+   "ref_low": 0.35175
+  },
+  "ASTR-USDT": {
+   "ref_high": 0.0078125,
+   "ref_low": 0.00390625
+  },
+  "AUDF-USDT": {
+   "ref_high": 0.7249,
+   "ref_low": 0.36245
+  },
+  "AUDM-USDT": {
+   "ref_high": 0.7252,
+   "ref_low": 0.3626
+  },
+  "AVNT-USDT": {
+   "ref_high": 0.14,
+   "ref_low": 0.07
+  },
+  "AXS-USDT": {
+   "ref_high": 1.2955546875,
+   "ref_low": 0.64777734375
+  },
+  "BABYDOGE-USDT": {
+   "ref_high": 4.18125e-10,
+   "ref_low": 2.090625e-10
+  },
+  "BARD-USDT": {
+   "ref_high": 0.10798125,
+   "ref_low": 0.053990625
+  },
+  "BERA-USDT": {
+   "ref_high": 0.228890625,
+   "ref_low": 0.1144453125
+  },
+  "BICO-USDT": {
+   "ref_high": 0.022265625,
+   "ref_low": 0.0111328125
+  },
+  "BIGTIME-USDT": {
+   "ref_high": 0.0077734375,
+   "ref_low": 0.00388671875
+  },
+  "BIO-USDT": {
+   "ref_high": 0.028359375,
+   "ref_low": 0.0141796875
+  },
+  "BLUR-USDT": {
+   "ref_high": 0.015625,
+   "ref_low": 0.0078125
+  },
+  "BONK-USDT": {
+   "ref_high": 3.8064375e-06,
+   "ref_low": 1.90321875e-06
+  },
+  "BREV-USDT": {
+   "ref_high": 0.0737375,
+   "ref_low": 0.03686875
+  },
+  "BRL1-USDT": {
+   "ref_high": 0.2045,
+   "ref_low": 0.10225
+  },
+  "CAT-USDT": {
+   "ref_high": 2.1675e-06,
+   "ref_low": 1.08375e-06
+  },
+  "CELO-USDT": {
+   "ref_high": 0.08302265625,
+   "ref_low": 0.041511328125
+  },
+  "CHZ-USDT": {
+   "ref_high": 0.01476390625,
+   "ref_low": 0.007381953125
+  },
+  "CITY-USDT": {
+   "ref_high": 0.4875,
+   "ref_low": 0.24375
+  },
+  "CORE-USDT": {
+   "ref_high": 0.026953125,
+   "ref_low": 0.0134765625
+  },
+  "CSPR-USDT": {
+   "ref_high": 0.00244140625,
+   "ref_low": 0.001220703125
+  },
+  "DATA-USDT": {
+   "ref_high": 0.17585,
+   "ref_low": 0.087925
+  },
+  "DEGEN-USDT": {
+   "ref_high": 0.00114034375,
+   "ref_low": 0.000570171875
+  },
+  "DYDX-USDT": {
+   "ref_high": 0.1171875,
+   "ref_low": 0.05859375
+  },
+  "EDGE-USDT": {
+   "ref_high": 0.38655,
+   "ref_low": 0.193275
+  },
+  "EGLD-USDT": {
+   "ref_high": 4.3896875,
+   "ref_low": 2.19484375
+  },
+  "FET-USDT": {
+   "ref_high": 0.21774375,
+   "ref_low": 0.108871875
+  },
+  "FLOW-USDT": {
+   "ref_high": 0.043037109375,
+   "ref_low": 0.0215185546875
+  },
+  "FLR-USDT": {
+   "ref_high": 0.01125,
+   "ref_low": 0.005625
+  },
+  "FOGO-USDT": {
+   "ref_high": 0.005346875,
+   "ref_low": 0.0026734375
+  },
+  "GALFT-USDT": {
+   "ref_high": 0.975125,
+   "ref_low": 0.4875625
+  },
+  "GMT-USDT": {
+   "ref_high": 0.00859375,
+   "ref_low": 0.004296875
+  },
+  "GOAT-USDT": {
+   "ref_high": 0.0146875,
+   "ref_low": 0.00734375
+  },
+  "GRAM-USDT": {
+   "ref_high": 1.844,
+   "ref_low": 0.922
+  },
+  "HMSTR-USDT": {
+   "ref_high": 0.000207375,
+   "ref_low": 0.0001036875
+  },
+  "ICP-USDT": {
+   "ref_high": 2.9296875,
+   "ref_low": 1.46484375
+  },
+  "ILV-USDT": {
+   "ref_high": 3.884765625,
+   "ref_low": 1.9423828125
+  },
+  "IOST-USDT": {
+   "ref_high": 0.00102734375,
+   "ref_low": 0.000513671875
+  },
+  "IRYS-USDT": {
+   "ref_high": 0.014995,
+   "ref_low": 0.0074975
+  },
+  "KAT-USDT": {
+   "ref_high": 0.00766925,
+   "ref_low": 0.003834625
+  },
+  "KNC-USDT": {
+   "ref_high": 0.1228125,
+   "ref_low": 0.06140625
+  },
+  "KSM-USDT": {
+   "ref_high": 4.882734375,
+   "ref_low": 2.4413671875
+  },
+  "LAT-USDT": {
+   "ref_high": 0.0006103515625,
+   "ref_low": 0.00030517578125
+  },
+  "LAYER-USDT": {
+   "ref_high": 0.107184375,
+   "ref_low": 0.0535921875
+  },
+  "LINEA-USDT": {
+   "ref_high": 0.00346875,
+   "ref_low": 0.001734375
+  },
+  "LRC-USDT": {
+   "ref_high": 0.015,
+   "ref_low": 0.0075
+  },
+  "MASK-USDT": {
+   "ref_high": 0.63125,
+   "ref_low": 0.315625
+  },
+  "ME-USDT": {
+   "ref_high": 0.08840625,
+   "ref_low": 0.044203125
+  },
+  "MEGA-USDT": {
+   "ref_high": 0.052575,
+   "ref_low": 0.0262875
+  },
+  "MENGO-USDT": {
+   "ref_high": 0.022255234375,
+   "ref_low": 0.0111276171875
+  },
+  "MERL-USDT": {
+   "ref_high": 0.0278125,
+   "ref_low": 0.01390625
+  },
+  "MOVE-USDT": {
+   "ref_high": 0.009593046875,
+   "ref_low": 0.0047965234375
+  },
+  "NEO-USDT": {
+   "ref_high": 2.9375,
+   "ref_low": 1.46875
+  },
+  "NES-USDT": {
+   "ref_high": 0.16545,
+   "ref_low": 0.082725
+  },
+  "NFT-USDT": {
+   "ref_high": 3.96875e-07,
+   "ref_low": 1.984375e-07
+  },
+  "NOT-USDT": {
+   "ref_high": 0.000459859375,
+   "ref_low": 0.0002299296875
+  },
+  "OFC-USDT": {
+   "ref_high": 0.00625,
+   "ref_low": 0.003125
+  },
+  "OP-USDT": {
+   "ref_high": 0.1519875,
+   "ref_low": 0.07599375
+  },
+  "PARTI-USDT": {
+   "ref_high": 0.03093125,
+   "ref_low": 0.015465625
+  },
+  "PAXG-USDT": {
+   "ref_high": 5639.7,
+   "ref_low": 2819.85
+  },
+  "PI-USDT": {
+   "ref_high": 0.09375,
+   "ref_low": 0.046875
+  },
+  "POL-USDT": {
+   "ref_high": 0.0960625,
+   "ref_low": 0.04803125
+  },
+  "POR-USDT": {
+   "ref_high": 0.08546875,
+   "ref_low": 0.042734375
+  },
+  "PROMPT-USDT": {
+   "ref_high": 0.019785,
+   "ref_low": 0.0098925
+  },
+  "PROVE-USDT": {
+   "ref_high": 0.257425,
+   "ref_low": 0.1287125
+  },
+  "PYUSD-USDT": {
+   "ref_high": 1.249975,
+   "ref_low": 0.6249875
+  },
+  "QTUM-USDT": {
+   "ref_high": 1.24478125,
+   "ref_low": 0.622390625
+  },
+  "RE-USDT": {
+   "ref_high": 0.546995,
+   "ref_low": 0.2734975
+  },
+  "RESOLV-USDT": {
+   "ref_high": 0.02679375,
+   "ref_low": 0.013396875
+  },
+  "RLUSD-USDT": {
+   "ref_high": 1.0028,
+   "ref_low": 0.5014
+  },
+  "ROBO-USDT": {
+   "ref_high": 0.0062625,
+   "ref_low": 0.00313125
+  },
+  "RON-USDT": {
+   "ref_high": 0.071296875,
+   "ref_low": 0.0356484375
+  },
+  "RPL-USDT": {
+   "ref_high": 2.0625,
+   "ref_low": 1.03125
+  },
+  "RSR-USDT": {
+   "ref_high": 0.00185625,
+   "ref_low": 0.000928125
+  },
+  "RVN-USDT": {
+   "ref_high": 0.002300859375,
+   "ref_low": 0.0011504296875
+  },
+  "SAFE-USDT": {
+   "ref_high": 0.11353125,
+   "ref_low": 0.056765625
+  },
+  "SAHARA-USDT": {
+   "ref_high": 0.010485,
+   "ref_low": 0.0052425
+  },
+  "SCR-USDT": {
+   "ref_high": 0.02254375,
+   "ref_low": 0.011271875
+  },
+  "SHIB-USDT": {
+   "ref_high": 5.554375e-06,
+   "ref_low": 2.7771875e-06
+  },
+  "SNX-USDT": {
+   "ref_high": 0.226484375,
+   "ref_low": 0.1132421875
+  },
+  "SONIC-USDT": {
+   "ref_high": 0.02060046875,
+   "ref_low": 0.010300234375
+  },
+  "SOPH-USDT": {
+   "ref_high": 0.0024375,
+   "ref_low": 0.00121875
+  },
+  "SPACE-USDT": {
+   "ref_high": 0.0063375,
+   "ref_low": 0.00316875
+  },
+  "SPK-USDT": {
+   "ref_high": 0.0241925,
+   "ref_low": 0.01209625
+  },
+  "SPURS-USDT": {
+   "ref_high": 0.0644375,
+   "ref_low": 0.03221875
+  },
+  "STETH-USDT": {
+   "ref_high": 2471.8,
+   "ref_low": 1235.9
+  },
+  "T-USDT": {
+   "ref_high": 0.00528125,
+   "ref_low": 0.002640625
+  },
+  "TAO-USDT": {
+   "ref_high": 341.2,
+   "ref_low": 170.6
+  },
+  "TNSR-USDT": {
+   "ref_high": 0.040625,
+   "ref_low": 0.0203125
+  },
+  "TOSHI-USDT": {
+   "ref_high": 0.0001352875,
+   "ref_low": 6.764375e-05
+  },
+  "TRA-USDT": {
+   "ref_high": 0.1953125,
+   "ref_low": 0.09765625
+  },
+  "TRUMP-USDT": {
+   "ref_high": 2.5625,
+   "ref_low": 1.28125
+  },
+  "USAT-USDT": {
+   "ref_high": 1.0067,
+   "ref_low": 0.50335
+  },
+  "USD1-USDT": {
+   "ref_high": 1.0514,
+   "ref_low": 0.5257
+  },
+  "USDG-USDT": {
+   "ref_high": 1.0063,
+   "ref_low": 0.50315
+  },
+  "USDS-USDT": {
+   "ref_high": 1.05,
+   "ref_low": 0.525
+  },
+  "VINE-USDT": {
+   "ref_high": 0.00765625,
+   "ref_low": 0.003828125
+  },
+  "W-USDT": {
+   "ref_high": 0.01421875,
+   "ref_low": 0.007109375
+  },
+  "WAXP-USDT": {
+   "ref_high": 0.00625,
+   "ref_low": 0.003125
+  },
+  "WCT-USDT": {
+   "ref_high": 0.043571875,
+   "ref_low": 0.0217859375
+  },
+  "WET-USDT": {
+   "ref_high": 0.085425,
+   "ref_low": 0.0427125
+  },
+  "WLFI-USDT": {
+   "ref_high": 0.0875,
+   "ref_low": 0.04375
+  },
+  "YB-USDT": {
+   "ref_high": 0.105625,
+   "ref_low": 0.0528125
+  },
+  "YFI-USDT": {
+   "ref_high": 2969.28125,
+   "ref_low": 1484.640625
+  },
+  "ZENT-USDT": {
+   "ref_high": 0.00284375,
+   "ref_low": 0.001421875
+  },
+  "ZETA-USDT": {
+   "ref_high": 0.044884375,
+   "ref_low": 0.0224421875
+  },
+  "ZIL-USDT": {
+   "ref_high": 0.0040103125,
+   "ref_low": 0.00200515625
+  },
+  "ZKJ-USDT": {
+   "ref_high": 0.00909296875,
+   "ref_low": 0.004546484375
+  },
+  "ZORA-USDT": {
+   "ref_high": 0.007213125,
+   "ref_low": 0.0036065625
+  }
+ },
+ "saved_at": "2026-10-20 03:02:25",
+ "system_params": {
+  "break_alert_interval": 1020,
+  "break_alert_max": 4,
+  "buy_ratio": 0.01,
+  "cooldown_days": 7,
+  "data_source": "OKX",
+  "profit_step": 0.01,
+  "profit_trigger": 0.065,
+  "push_interval": 3.0,
+  "stop_loss": 0.015,
+  "total_funds": 1000000.0,
+  "trade_mode": "demo"
+ },
+ "version": "v6.0"
+}

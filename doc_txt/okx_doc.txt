@@ -1,0 +1,354 @@
+OKX 自动交易系统改进建议
+基于对 v5.5 代码的完整审阅，以下按优先级和类别给出改进建议。
+
+一、高优先级（正确性/资金安全相关）
+1.1 卖出数量与实际持仓可能不一致
+问题： _execute_sell() 使用 self.position_qty 作为卖出数量，但这个值来自本地账本。运行期不与平台同步（v5.7 设计），若期间有手动交易、部分成交、手续费扣币等，本地数量会与平台实际持仓偏离，导致：
+
+卖出数量 > 实际持仓 → 下单被拒
+
+卖出数量 < 实际持仓 → 残留粉尘
+
+建议：
+
+卖出前调用 /api/v5/account/balance 或 /api/v5/trade/orders-pending 核对一次实际可用数量（仅卖出场景，不违反"运行期以本地账本为准"的设计）
+
+或捕获 sCode=51008（余额不足）等错误，自动降级为按实际余额卖出
+
+卖出成功后按 accFillSz 反写本地账本，而非直接清零
+
+1.2 手续费处理不一致
+问题： _fill_result() 中：
+
+python
+if side == "buy":
+    result["qty"] = acc_sz + fee if fee_ccy == base_ccy else acc_sz
+    result["cost"] = gross_quote
+买入时若手续费以基础币扣除，qty 加上 fee，但 cost 仍为 avgPx * acc_sz，导致成本价被低估
+
+卖出时 proceeds = gross_quote + fee if fee_ccy != base_ccy，若手续费以计价币扣除，应减去 fee
+
+建议：
+
+统一手续费口径，明确"到手数量/到手金额"的定义
+
+成本价应含手续费：cost = gross_quote + (fee 折USDT)，数量应为实际到账数量
+
+卖出 proceeds = gross_quote - (fee 折USDT)
+
+1.3 超出计算范围检测的边界问题
+问题： v5.5 逻辑中，update_price() 一旦检测到价格超出 [range_low, range_high] 就永久 out_of_range = True，即使价格后来回到范围内也不再买入。
+
+建议：
+
+明确业务意图：是"永久剔除"还是"临时剔除"？
+
+若为临时，应改为每次 tick 判断，价格回到范围内时清除 out_of_range 状态并重新加入买入队列
+
+若为永久，建议在 xlsx 记录中增加"恢复条件"字段，便于人工审核恢复
+
+1.4 止盈激活的毛刺防护不够
+问题： 当前撤销逻辑是"盈利回落到 6.5% 以下撤销"，但止盈价已更新为 peak_price * (1-stop_ratio)。若价格先冲高再快速回落：
+
+峰值 6.6% 时激活，止盈价设为成本+5%
+
+价格回落到 6.4%，撤销激活，stop_price = 0
+
+但 peak_price 仍保留高位
+
+价格再次回到 6.5%，重新激活，止盈价按新峰值计算——可能高于当前价，导致立即触发
+
+建议：
+
+撤销时同步重置 peak_price 为当前价，或记录"有效峰值"
+
+增加"激活后至少保持 N 秒"或"激活后盈利需再创新高才更新止盈价"的规则
+
+引入最小激活持续时间，防止高频抖动
+
+1.5 配对卖点触发的止盈价可能失效
+问题： 普通持仓到达配对卖点不卖出，等动态止盈。但如果盈利从未达到 6.5%，永远不会激活 profit_triggered，价格可能在配对卖点附近反复震荡，最终跌破成本。
+
+建议：
+
+为配对卖点增加"兜底卖出"规则：到达配对卖点且盈利 ≥ 某个阈值（如 2%~3%）时，即使未激活动态止盈也考虑减仓
+
+或引入"时间止损"：持仓超过 N 天且盈利不足，主动离场
+
+1.6 买入信号与买点的动态漂移
+问题： 买入信号激活时记录 buy_signal_buy_price = buy_level。但 levels 会随 high/low 更新而实时重算，而信号中保存的买点是旧值。价格反弹后若 levels 已更新，信号可能与实际买点脱节。
+
+建议：
+
+信号中保存的买点应跟随 levels 更新，或明确"以激活时刻的买点为准"
+
+增加日志记录买点漂移情况，便于回测验证
+
+二、中优先级（健壮性/可维护性）
+2.1 全量读写 CSV 的性能与并发问题
+问题： load_positions() / save_positions() 每次全量读写，_save_state() 每 5 秒调用一次，币对多时 I/O 压力大。且 _write_csv_all 使用 os.replace 原子替换，但 load_positions() 与 save_positions() 之间无跨进程锁。
+
+建议：
+
+持仓状态改为单文件 JSON（positions.json），读写更快
+
+或引入 SQLite，支持事务和行级更新
+
+至少为 CSV 读写加文件锁（fcntl.flock），防止多进程/多线程交错
+
+2.2 load_positions() 被频繁调用
+问题： _can_buy() 中调用 load_positions() 做双重检查，_save_state() 中也调用。每次都是全量读盘 + 解析。
+
+建议：
+
+内存中维护一份 positions_cache，仅在关键事件时刷盘
+
+参考 _positions_cache 的设计，为本地账本增加缓存层
+
+2.3 异常处理过于宽泛
+问题： 多处使用 except Exception: 或 except:，掩盖了真实错误。例如：
+
+python
+try:
+    price = float(trade["px"])
+except:
+    continue
+建议：
+
+至少捕获具体异常（KeyError、ValueError）
+
+记录异常详情到日志，便于排查
+
+关键路径（下单、查询）不要静默吞异常
+
+2.4 日志级别与推送耦合
+问题： Logger._write() 中，level == "ERROR" 会自动推送钉钉/飞书。但 OKX 连接异常也会走 logger.error()，导致每 25 秒可能误推一次"系统异常"（v5.4.1_fix 已修 pong 问题，但连接失败仍会推送）。
+
+建议：
+
+区分"业务错误"和"网络错误"，网络错误累积到一定次数再推送
+
+增加推送限流：同一错误 N 分钟内只推一次
+
+参考 BREAK_ALERT_MAX_PER_DAY / BREAK_ALERT_MIN_INTERVAL_SEC 的设计
+
+2.5 买入队列的 _sync_buy_queue() 逻辑分散
+问题： 买入队列的状态更新分散在 _sync_buy_queue()、_add_to_buy_queue()、_remove_from_buy_queue()、_is_in_cooldown() 中，状态机不清晰。
+
+建议：
+
+将买入队列状态集中管理，定义明确的状态枚举：待买入 / 已持仓_排除 / 静默期_排除 / 观察列表_排除 / 超出范围_排除 / 黑名单_排除
+
+每次状态变更走统一入口，便于审计
+
+2.6 配置热加载缺失
+问题： okx_ding_ok_config.xlsx 仅在启动时加载一次，运行期间修改配置需重启。
+
+建议：
+
+增加配置文件监听（watchdog 或定时检查 mtime）
+
+变更后增量更新 SymbolState（新增币对、移除币对、修改 ref_high/ref_low）
+
+至少支持"新增币对"和"修改启停"两类变更
+
+三、中优先级（策略/业务）
+3.1 买入金额计算可优化
+问题： buy_amount = balance * buy_ratio，每次买入固定比例。但：
+
+未考虑已有持仓的总仓位
+
+未考虑币对的波动率差异
+
+未考虑买点深度（越深的买点可买越多）
+
+建议：
+
+引入"总仓位上限"，避免单一币对过度集中
+
+按买点深度动态调整金额（如极限买点买更多）
+
+按 ATR 或历史波动率做仓位缩放
+
+3.2 卖出策略可增加分层
+问题： 当前卖出是"一次性清仓"，没有分批减仓。
+
+建议：
+
+在盈利 6.5%~10% 时减仓 50%，10%~20% 再减 30%，剩余 20% 由动态止盈管理
+
+或按配对卖点分批：到达第一个卖点减仓 50%，到达第二个卖点清仓
+
+降低单次决策压力，平滑收益曲线
+
+3.3 静默期规则可细化
+问题： 卖出后统一 cooldown_days 天冷却，未区分盈利/亏损。
+
+建议：
+
+盈利卖出：静默期短（如 1 天），允许快速再入场
+
+亏损卖出：静默期长（如 7 天），避免情绪化交易
+
+或按亏损幅度动态调整静默期
+
+3.4 高低点更新策略
+问题： high/low 随行情实时更新，levels 实时重算。但：
+
+若价格剧烈波动，levels 可能频繁大幅变化
+
+买点可能因 low 更新而下移，导致原信号失效
+
+建议：
+
+引入"高低点更新节流"：如 5 分钟内不重复更新
+
+或区分"配置范围"和"动态范围"，买点计算仅用配置范围，动态范围用于止盈
+
+记录 levels 变化历史，便于回测
+
+3.5 配对卖点的豁免规则可扩展
+问题： 当前仅"历史最大亏损 > 5%"可豁免动态止盈，直接按配对卖点清仓。
+
+建议：
+
+增加"持仓时长豁免"：持仓超过 N 天且盈利 ≥ 2% 即可按配对卖点清仓
+
+增加"价格位置豁免"：价格接近历史高位时，配对卖点清仓不受动态止盈约束
+
+四、低优先级（工程优化）
+4.1 代码结构
+单文件过大：建议拆分为 okx_client.py、strategy.py、notify.py、storage.py、main.py
+
+PROFIT_STOP_MAP 硬编码：200 行数据可改为公式 stop = max(0.015, 0.20 - profit_pct) 或从配置读取
+
+PriceLevels 计算：中间变量过多（pullback1_mid、pullback_up 等），可简化为函数
+
+4.2 测试覆盖
+建议为 PriceLevels、get_stop_loss、_can_buy、_can_sell 编写单元测试
+
+增加回测框架：输入历史成交数据，输出交易信号，验证策略
+
+4.3 可观测性
+增加 /health 端点或心跳文件，便于外部监控
+
+增加 Prometheus 指标：行情延迟、订单成功率、持仓盈亏
+
+结构化日志（JSON），便于 ELK 采集
+
+4.4 安全
+API 凭证：确保 .env 不被提交到版本控制，增加 .gitignore
+
+实盘确认：OKX_LIVE_CONFIRM=YES 可改为二次确认（输入密码）
+
+敏感信息脱敏：日志中不打印 API key、passphrase
+
+4.5 文档
+增加 README.md：安装、配置、启动、停止、故障排查
+
+增加配置项说明表：每个 .env 变量的含义、默认值、取值范围
+
+增加"常见错误码"对照表：51155、51201、51008 等
+
+五、具体代码级建议
+5.1 _fill_result 手续费修正
+python
+@staticmethod
+def _fill_result(od, side):
+    avg_px = float(od.get("avgPx") or 0)
+    acc_sz = float(od.get("accFillSz") or 0)
+    fee = abs(float(od.get("fee") or 0))
+    fee_ccy = od.get("feeCcy", "")
+    base_ccy = (od.get("instId", "").split("-") or [""])[0]
+    quote_ccy = (od.get("instId", "").split("-") or ["", ""])[1]
+    gross_quote = avg_px * acc_sz
+
+    if side == "buy":
+        # 买入：实际到账基础币 = acc_sz - fee(若以基础币计)
+        net_qty = acc_sz - fee if fee_ccy == base_ccy else acc_sz
+        # 成本（计价币）= 成交额 + 手续费(若以计价币计)
+        cost = gross_quote + fee if fee_ccy == quote_ccy else gross_quote
+        return {"price": avg_px, "qty": net_qty, "cost": cost, ...}
+    else:
+        # 卖出：实际到手计价币 = 成交额 - 手续费(若以计价币计)
+        proceeds = gross_quote - fee if fee_ccy == quote_ccy else gross_quote
+        # 实际卖出基础币 = acc_sz + fee(若以基础币计)
+        net_qty = acc_sz + fee if fee_ccy == base_ccy else acc_sz
+        return {"price": avg_px, "qty": net_qty, "proceeds": proceeds, ...}
+5.2 卖出前核对实际持仓
+python
+def _execute_sell(self, price, reason, require_profit=True):
+    can, msg = self._can_sell(require_profit, price)
+    if not can:
+        return None
+    # 卖出前核对实际可用数量
+    try:
+        actual_bal = self.client.get_balance(
+            ccy=self.inst_id.split("-")[0]
+        )
+    except Exception:
+        actual_bal = self.position_qty
+    qty = min(self.position_qty, actual_bal)
+    if qty <= 0:
+        self.logger.error(f"{self.inst_id} 实际可用数量为 0，跳过卖出")
+        return None
+    fill = self.client.market_sell_base(self.inst_id, qty)
+    # ... 后续按 fill['qty'] 反写本地账本
+5.3 超出范围状态可恢复
+python
+# 在 update_price 中，而非只在超出时检测
+if self.out_of_range:
+    if self.range_low <= price <= self.range_high:
+        # 价格回到范围内，恢复买入资格
+        self.out_of_range = False
+        self._add_to_buy_queue("待买入")
+        self.logger.info(f"{self.inst_id} 价格回到计算范围，恢复买入")
+        self._push_notify(f"✅ 恢复买入\n\n{self.inst_id}\n当前价: {price:.8g}")
+5.4 止盈撤销时重置峰值
+python
+if self.profit_triggered and profit_pct < 0.065:
+    self.logger.info(f"{self.inst_id} 盈利回落至6.5%以下，关闭止盈激活")
+    self.profit_triggered = False
+    self.stop_price = 0
+    self.peak_price = price  # 重置峰值，防止假激活
+    self._update_check_level(profit_pct)
+    self._save_state(force=True)
+    return None
+5.5 推送限流
+python
+_PUSH_THROTTLE = {}  # key -> last_ts
+_PUSH_THROTTLE_LOCK = threading.Lock()
+
+def push_notify_throttled(text, title="交易提醒", key=None, interval=300):
+    """同一 key 在 interval 秒内只推送一次"""
+    if key:
+        now = time.time()
+        with _PUSH_THROTTLE_LOCK:
+            last = _PUSH_THROTTLE.get(key, 0)
+            if now - last < interval:
+                return False
+            _PUSH_THROTTLE[key] = now
+    return push_notify(text, title)
+在 Logger._push_error 中使用：
+
+python
+def _push_error(self, msg):
+    # 同一错误 5 分钟内只推一次
+    push_notify_throttled(
+        f"🚨 系统异常\n\n{msg}",
+        title="系统异常",
+        key=f"error:{msg[:50]}",
+        interval=300
+    )
+六、优先级建议总结
+优先级	建议	影响
+P0	卖出前核对实际持仓（1.1）	资金安全
+P0	手续费处理修正（1.2）	成本计算准确
+P0	止盈毛刺防护（1.4）	防止假激活亏损
+P1	超出范围可恢复（1.3/5.3）	策略灵活性
+P1	配对卖点兜底（1.5）	避免长期套牢
+P1	CSV 换 SQLite/JSON（2.1/2.2）	性能与并发
+P2	配置热加载（2.6）	运维便利
+P2	分批减仓（3.2）	收益平滑
+P2	推送限流（5.5）	减少骚扰
+P3	代码拆分与测试（4.1/4.2）	可维护性
