@@ -109,6 +109,14 @@ def make_state(inst_id="TEST-USDT", **over):
     st._last_profit_pct = 0.0
     st._last_processed_price = 0.0
     st._last_processed_ts = 0.0
+    # v6.1：异常行情过滤状态（与 SymbolState.__init__ 对齐）
+    st._last_good_price = 0.0
+    st._last_good_ts = 0.0
+    st._last_any_tick_ts = 0.0
+    st._abnormal_candidate_price = 0.0
+    st._abnormal_candidate_count = 0
+    st._abnormal_last_log_ts = 0.0
+    st._abnormal_rejected_total = 0
     st._range_flip_ts = 0.0
     st._balance_insufficient_until = 0.0
     st._buy_blocked_until = 0.0
@@ -2369,6 +2377,159 @@ class TestLadderSpec(unittest.TestCase):
             for i, s in enumerate(steps):
                 self.assertAlmostEqual(s, expect, delta=abs(high) * 1e-12,
                                        msg=f"{names[i]} → {names[i+1]} 间距 {s} ≠ {expect}")
+
+
+class TestMarketDataGuards(TempFilesMixin, unittest.TestCase):
+    """v6.1：异常行情 / 换层滞回 / 重复清仓抑制的回归测试。"""
+
+    def _state(self, **over):
+        st = make_state(**over)
+        st._save_state = lambda force=False: None
+        st._push_notify = lambda t: None
+        return st
+
+    def test_single_extreme_tick_is_ignored(self):
+        st = self._state()
+        st.update_price(1.0, 1.0)
+        before = (st.levels.low, st.levels.high)
+        alerts = st.update_price(0.001, 2.0)
+        self.assertEqual(alerts, [])
+        self.assertEqual((st.levels.low, st.levels.high), before)
+        self.assertEqual(st._last_processed_price, 1.0)
+        self.assertEqual(st._abnormal_rejected_total, 1)
+
+    def test_non_positive_tick_is_ignored(self):
+        st = self._state()
+        st.update_price(1.0, 1.0)
+        self.assertEqual(st.update_price(0.0, 2.0), [])
+        self.assertEqual(st._last_processed_price, 1.0)
+        self.assertEqual(st.levels.high, 2.0)
+
+    def test_extreme_price_confirmed_after_three_ticks(self):
+        st = self._state()
+        st.update_price(1.0, 1.0)
+        st.update_price(0.1, 2.0)
+        st.update_price(0.1, 3.0)
+        self.assertEqual(st.levels.high, 2.0)      # 前两次仍拦截
+        st.update_price(0.1, 4.0)                  # 第三次确认 → 接受并换层
+        self.assertLess(st.levels.high, 1.0)
+        self.assertEqual(st._abnormal_candidate_count, 0)
+
+    def test_layer_shift_requires_hysteresis(self):
+        st = self._state()
+        st.update_price(2.005, 1.0)                # 仅越界 0.25%，不足 0.5% 滞回带
+        self.assertEqual(st.levels.high, 2.0)
+        st.update_price(2.02, 2.0)                 # 越界 1% → 换层
+        self.assertAlmostEqual(st.levels.high, 4.0)
+        self.assertAlmostEqual(st.levels.low, 1.0)
+
+    def test_duplicate_sell_suppressed_while_pending(self):
+        calls = []
+        st = self._state(
+            has_position=True, position_price=1.0, position_qty=1000.0,
+            position_amount=1000.0, entry_type="high",
+            buy_layer_low=0.5, buy_layer_high=2.0,
+            risen_low=1.0, risen_high=1.5, risen_armed=True,
+        )
+        st._request_sell = lambda *a, **k: calls.append((a, k)) or "sell-submitted"
+        st.order_in_flight = "sell"
+        st.update_price(1.2, 1.0)                  # 破清仓1线，但卖单在途 → 不重复请求
+        self.assertEqual(calls, [])
+        st.order_in_flight = None
+        st._sell_blocked_until = time.time() + 60
+        st.update_price(1.21, 2.0)                 # 挂单占用退避期 → 仍不请求
+        self.assertEqual(calls, [])
+        st._sell_blocked_until = 0
+        st.update_price(1.22, 3.0)                 # 退避结束 → 正常触发一次
+        self.assertEqual(len(calls), 1)
+
+    def test_fetch_all_ticker_prices_retries_then_succeeds(self):
+        class FakeClient:
+            def __init__(self):
+                self.calls = 0
+
+            def _request(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls < 3:
+                    raise RuntimeError("temporary network error")
+                return {"data": [{"instId": "A-USDT", "last": "1.23"}]}
+
+        old_client = mod._okx_client
+        old_delay = mod.MARKET_GAP_REST_RETRY_DELAY_SEC
+        fake = FakeClient()
+        mod._okx_client = fake
+        mod.MARKET_GAP_REST_RETRY_DELAY_SEC = 0
+        try:
+            self.assertEqual(mod.fetch_all_ticker_prices(), {"A-USDT": 1.23})
+            self.assertEqual(fake.calls, 3)
+        finally:
+            mod._okx_client = old_client
+            mod.MARKET_GAP_REST_RETRY_DELAY_SEC = old_delay
+
+    def test_startup_position_sync_retries(self):
+        class FakeClient:
+            def get_balance(self, ccy="USDT"):
+                return 1000.0
+
+        calls = []
+        old_client = mod._okx_client
+        old_sync = mod.sync_positions_from_api
+        old_delay = mod.POSITION_SYNC_RETRY_DELAY_SEC
+        mod._okx_client = FakeClient()
+        mod.POSITION_SYNC_RETRY_DELAY_SEC = 0
+
+        def fake_sync(logger=None):
+            calls.append(1)
+            return len(calls) >= 3
+
+        mod.sync_positions_from_api = fake_sync
+        try:
+            self.assertTrue(mod._okx_probe_and_sync(mod.Logger(os.devnull)))
+            self.assertEqual(len(calls), 3)
+        finally:
+            mod._okx_client = old_client
+            mod.sync_positions_from_api = old_sync
+            mod.POSITION_SYNC_RETRY_DELAY_SEC = old_delay
+
+    def test_daily_report_uses_rolling_24h_window(self):
+        import csv as _csv
+        import daily_report as dr
+
+        now = datetime(2026, 10, 29, 20, 0, 0)
+
+        def write_csv(name, header, rows):
+            with open(os.path.join(self.tmpdir, name), "w", encoding="utf-8-sig", newline="") as f:
+                writer = _csv.DictWriter(f, fieldnames=header)
+                writer.writeheader()
+                writer.writerows(rows)
+
+        write_csv("okx_ding_ok_funds.csv",
+                  ["remaining_funds", "total_position_market_value", "total_realized_pnl", "net_asset_value"],
+                  [{"remaining_funds": "1000", "total_position_market_value": "100",
+                    "total_realized_pnl": "0", "net_asset_value": "1100"}])
+        write_csv("okx_ding_ok_positions.csv", ["inst_id", "unrealized_pnl", "market_value"],
+                  [{"inst_id": "A-USDT", "unrealized_pnl": "-1.5", "market_value": "98.5"}])
+        trade_header = ["timestamp", "inst_id", "direction", "price", "qty", "amount",
+                        "remaining_funds", "position_price", "profit", "profit_pct", "reason"]
+        write_csv("okx_ding_ok_tradeRecord.csv", trade_header, [
+            {"timestamp": (now - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S"),
+             "inst_id": "OLD-USDT", "direction": "BUY", "profit": "0"},
+            {"timestamp": (now - timedelta(hours=23)).strftime("%Y-%m-%d %H:%M:%S"),
+             "inst_id": "SELL-USDT", "direction": "SELL", "profit": "12.5"},
+            {"timestamp": (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
+             "inst_id": "NEW-USDT", "direction": "BUY", "profit": "0"},
+        ])
+
+        old_data = dr.DATA
+        dr.DATA = self.tmpdir
+        try:
+            report = dr.build_report(now=now)
+        finally:
+            dr.DATA = old_data
+        self.assertIn("近 24 小时", report)
+        self.assertIn("窗口成交: 买 1 / 卖 1，已实现盈亏 +12.50", report)
+        self.assertIn("资金: 可用 1000.00  仓位市值 98.50  浮盈 -1.50  净值 1098.50", report)
+        self.assertNotIn("OLD-USDT", report)
 
 
 if __name__ == "__main__":

@@ -153,6 +153,25 @@ class TestAlignGhostReset(TempFilesMixin, unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.pushes, [])
 
+    def test_qty_adjustment_preserves_all_in_cost(self):
+        # 买入手续费已计入 position_amount（100.8 而非 1000×0.1），平台数量微调时不得抹掉
+        mod.save_positions({"1INCH-USDT": {
+            "position_price": 0.1, "position_qty": 1000.0, "position_amount": 100.8,
+            "buy_time": "2026-10-29 15:09:11", "buy_reason": "单测持仓",
+            "pair_type": "", "pair_sell_line": "", "peak_price": 0.1,
+            "stop_price": 0, "profit_triggered": False, "check_level": "T3",
+            "last_check_time": "", "current_price": 0.1, "market_value": 100.0,
+            "unrealized_pnl": 0, "unrealized_pnl_pct": 0, "max_loss_pct": 0,
+        }})
+        ok = mod._apply_platform_positions({
+            "1INCH-USDT": {"position_price": 0.1, "position_qty": 1000.0001,
+                           "position_amount": 100.00001},
+        })
+        self.assertTrue(ok)
+        row = mod.load_positions()["1INCH-USDT"]
+        self.assertAlmostEqual(row["position_amount"], 100.8 / 1000.0 * 1000.0001, places=10)
+        self.assertAlmostEqual(row["position_qty"], 1000.0001, places=10)
+
 
 class TestRuntimeAudit(TempFilesMixin, unittest.TestCase):
     def _engine(self):
@@ -164,14 +183,14 @@ class TestRuntimeAudit(TempFilesMixin, unittest.TestCase):
         eng = self._engine()
         eng._last_position_audit = time.time()
         called = []
-        mod.fetch_platform_positions = lambda: called.append(1) or {}
+        mod.fetch_platform_positions = lambda min_usd=0.0: called.append(1) or {}
         self.assertFalse(eng._audit_positions_due())
         self.assertEqual(called, [])
 
     def test_disabled_by_zero_interval(self):
         eng = self._engine()
         called = []
-        mod.fetch_platform_positions = lambda: called.append(1) or {}
+        mod.fetch_platform_positions = lambda min_usd=0.0: called.append(1) or {}
         orig_sec = mod.POSITION_AUDIT_SEC
         mod.POSITION_AUDIT_SEC = 0
         try:
@@ -184,7 +203,7 @@ class TestRuntimeAudit(TempFilesMixin, unittest.TestCase):
         inst = seed_position("RVN-USDT")
         mod.save_pair_status(inst, {"is_paired": True, "is_sold": False})
         eng = self._engine()
-        mod.fetch_platform_positions = lambda: None
+        mod.fetch_platform_positions = lambda min_usd=0.0: None
         self.assertFalse(eng._audit_positions_due())
         self.assertIn(inst, mod.load_positions())
         self.assertFalse(mod.load_pair_status()[inst]["is_sold"])
@@ -194,7 +213,7 @@ class TestRuntimeAudit(TempFilesMixin, unittest.TestCase):
         inst = seed_position("OP-USDT")
         mod.save_pair_status(inst, {"is_paired": True, "is_sold": False})
         eng = self._engine()
-        mod.fetch_platform_positions = lambda: {
+        mod.fetch_platform_positions = lambda min_usd=0.0: {
             inst: {"position_price": 0.14, "position_qty": 6885.0, "position_amount": 951.9}}
         self.assertFalse(eng._audit_positions_due())
         self.assertIn(inst, mod.load_positions())
@@ -207,7 +226,7 @@ class TestRuntimeAudit(TempFilesMixin, unittest.TestCase):
         eng = self._engine()
         st = mini_state(inst)
         eng.states[inst] = st
-        mod.fetch_platform_positions = lambda: {}   # 平台已无任何余额
+        mod.fetch_platform_positions = lambda min_usd=0.0: {}   # 平台已无任何余额
         self.assertTrue(eng._audit_positions_due())
         self.assertNotIn(inst, mod.load_positions())
         row = mod.load_pair_status()[inst]
@@ -224,7 +243,7 @@ class TestRuntimeAudit(TempFilesMixin, unittest.TestCase):
         inst = seed_position("RVN-USDT")
         eng = self._engine()
         eng.states[inst] = mini_state(inst)
-        mod.fetch_platform_positions = lambda: {}
+        mod.fetch_platform_positions = lambda min_usd=0.0: {}
         self.assertTrue(eng._audit_positions_due())
         # 即使内存状态残留，脏落盘也不应把刚清掉的持仓行写回
         with eng.lock:
@@ -241,7 +260,7 @@ class TestRuntimeAudit(TempFilesMixin, unittest.TestCase):
         st.position_qty = 0.0
         st.position_amount = 0.0
         eng.states["RSR-USDT"] = st
-        mod.fetch_platform_positions = lambda: {}
+        mod.fetch_platform_positions = lambda min_usd=0.0: {}
         self.assertTrue(eng._audit_positions_due())
         row = mod.load_pair_status()["RSR-USDT"]
         self.assertTrue(row["is_sold"])

@@ -2,8 +2,21 @@
 # -*- coding: utf-8 -*-
 """
 OKX 实时成交价监听 + 多层次价位计算 + 动态止盈 + 多通道消息推送（钉钉/飞书）
-版本: v5.20
-更新: 2026-10-18
+版本: v6.1
+更新: 2026-10-29
+v6.1 修正（只修工程质量与数据质量，策略阈值、买卖规则未动，需重启进程生效）：
+1.【异常行情过滤】模拟盘 MASK-USDT 曾多次出现单笔 0.001（正常价约 0.395）的极端成交，
+   触发层界连环下移/回升。现对偏离最近有效价超过 ABNORMAL_TICK_MAX_DEVIATION_PCT（默认 80%）
+   的 tick 先拦截；连续 ABNORMAL_TICK_CONFIRM_COUNT（默认 3）个相互接近的极端价才确认为真实
+   行情并重建基准（长时间无有效行情 ABNORMAL_TICK_RESET_SEC 后同样自动重建）。策略阈值不变。
+2.【换层滞回】价格须越过层界 LAYER_SHIFT_HYSTERESIS_PCT（默认 0.5%）才换层，消除 CSPR/FIL/
+   RLUSD 等贴线币对在层界附近反复换层；跨多层时每层仍按该滞回带判定。
+3.【重复清仓抑制】卖出在途（order_in_flight）或挂单占用退避（_sell_blocked_until）期间，
+   不再重复打印"清仓1/2/3"与重复投递卖单，但峰值/止盈激活/已涨幅度仍持续更新。
+4.【日报窗口】daily_report.py 由"当天 00:00 至 09:05"改为滚动近 24 小时，避免每天 09:05
+   之后成交的买卖在次日日报中丢失。
+5.【REST 补齐告警】批量最新价失败时按 MARKET_GAP_REST_RETRIES（默认 3 次）重试；连续失败
+   改为可见 WARN（5 分钟节流），不再只写 DEBUG。
 v5.20 修正（用户反馈"启动后未收到行情持续、行情取不到、所有计算无法进行"；策略阈值与买卖规则未动，
 需重启进程生效）：
 1.【全市场 REST 行情补齐（C12 推广）】模拟盘 WS 成交推送稀疏：实证 26 个持仓中 22 个"启动后未
@@ -333,7 +346,7 @@ def env_num(name: str, default, cast=float):
         return default
 # ==================== 配置常量 ====================
 PROGRAM_NAME = "okx_ding_ok"
-VERSION = "v6.0"
+VERSION = "v6.1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # v5.13：股票池来源改为 .env INPUT_DATA 指定目录下的全部 xlsx（含子目录）。
 # 每个文件的第 2 个 sheet（"层计算幅度"）：A=股票代码(币对)、C=同层最低→ref_low、D=同层最高→ref_high。
@@ -491,6 +504,21 @@ RECONNECT_DELAY = 3
 # （现价与边界仅差十万分之一）反复翻转，恢复需比边界内缩 RANGE_HYSTERESIS_PCT，且两次翻转间隔不小于 RANGE_FLIP_MIN_INTERVAL_SEC
 RANGE_HYSTERESIS_PCT = env_num("OUT_OF_RANGE_HYSTERESIS_PCT", 0.005)
 RANGE_FLIP_MIN_INTERVAL_SEC = env_num("OUT_OF_RANGE_FLIP_MIN_SEC", 300.0)
+# v6.1：换层滞回。价格须越过当前层界 LAYER_SHIFT_HYSTERESIS_PCT（默认 0.5%）才认定换层，
+# 避免贴线币对（CSPR/FIL/RLUSD 等）在层界附近一个 tick 就上下往返。几何层梯上下层相差 2 倍，
+# 0.5% 的滞回带只影响层界附近的噪声，不改变有效区间内的策略判定。
+LAYER_SHIFT_HYSTERESIS_PCT = min(0.25, max(0.0, env_num("LAYER_SHIFT_HYSTERESIS_PCT", 0.005)))
+# v6.1：异常行情过滤。单个 tick 相对最近有效价偏离超过 ABNORMAL_TICK_MAX_DEVIATION_PCT
+# （默认 80%）时先拦截；只有连续 ABNORMAL_TICK_CONFIRM_COUNT（默认 3）个相互接近
+# （容差 ABNORMAL_TICK_CONFIRM_TOLERANCE_PCT，默认 5%）的极端价才确认是真实行情。
+# 长时间（默认 900s）没有任何 tick 时自动把下一笔当作新基准，避免长期卡死。
+ABNORMAL_TICK_ENABLED = os.getenv("ABNORMAL_TICK_ENABLED", "1").strip().lower() not in (
+    "0", "false", "no", "off", "disabled")
+ABNORMAL_TICK_MAX_DEVIATION_PCT = min(0.99, max(0.05, env_num("ABNORMAL_TICK_MAX_DEVIATION_PCT", 0.8)))
+ABNORMAL_TICK_CONFIRM_COUNT = max(2, env_num("ABNORMAL_TICK_CONFIRM_COUNT", 3, int))
+ABNORMAL_TICK_CONFIRM_TOLERANCE_PCT = max(0.0, env_num("ABNORMAL_TICK_CONFIRM_TOLERANCE_PCT", 0.05))
+ABNORMAL_TICK_RESET_SEC = max(60.0, env_num("ABNORMAL_TICK_RESET_SEC", 900.0))
+ABNORMAL_TICK_LOG_THROTTLE_SEC = max(1.0, env_num("ABNORMAL_TICK_LOG_THROTTLE_SEC", 60.0))
 # v5.16（文档 C4）：买点漂移重绑死区。价格须越过旧买点边界 BUY_REBIND_DEADBAND_PCT（默认 0.3%）
 # 才认可"最佳买点漂移"并重绑；死区内保持原绑定、最低价继续滚动，消除贴线抖动的反复重绑/推送
 # （实证两天 384 次漂移，TAO 一秒内 callback2_down↔pullback2_down 往返）。设 0 关闭死区。
@@ -693,6 +721,10 @@ def write_heartbeat(engine, extra: Optional[Dict] = None) -> Dict:
                                   and _hb_now - getattr(st, "last_tick_ts", 0.0) > STALE_TICK_SEC)
             # v5.20：上轮行情补齐喂入数量（远程判断"冷门币对是否在持续补齐"）
             market_gap_fed = getattr(engine, "_last_market_gap_fed", 0)
+            # v6.1：异常行情累计拦截数 + REST 补齐连续失败轮数
+            abnormal_rejected = sum(getattr(st, "_abnormal_rejected_total", 0)
+                                    for st in engine.states.values())
+            market_gap_rest_failures = getattr(engine, "_market_gap_rest_failures", 0)
             # v5.18（文档 C7）：订单执行线程观测（队列深度 + 执行中的币对数）
             orders_pending = engine.orders.pending() if getattr(engine, "orders", None) is not None else 0
             orders_in_flight = sum(1 for st in engine.states.values()
@@ -711,6 +743,8 @@ def write_heartbeat(engine, extra: Optional[Dict] = None) -> Dict:
             "reconcile_symbols": reconcile_symbols,
             "stale_positions": stale_positions,
             "market_gap_fed": market_gap_fed,
+            "market_gap_rest_failures": market_gap_rest_failures,
+            "abnormal_ticks_rejected": abnormal_rejected,
             "orders_pending": orders_pending,
             "orders_in_flight": orders_in_flight,
             "ws": {k: v for k, v in WS_HEALTH.items()},
@@ -1417,6 +1451,10 @@ POS_MIN_USD = env_num("POS_MIN_USD", 1.0)  # 折合USD低于此值的粉尘余�
 # v5.16（文档 C5）：粉尘残仓清理核对的每币对最短间隔（持仓市值 < POS_MIN_USD 时才触发 REST 核对）
 DUST_CHECK_SEC = env_num("DUST_CHECK_SEC", 3600.0)
 POSITION_AUDIT_SEC = env_num("POSITION_AUDIT_SEC", 300.0)  # v5.14 运行期对账周期（秒），<=0 关闭
+# v6.1：启动持仓同步重试。原实现只调用一次，网络瞬断即放弃并打印"持仓同步未完成"；
+# 本地账本虽可继续使用，但平台独有持仓/数量偏差要等到下次重启才会被对齐。
+POSITION_SYNC_RETRIES = max(1, env_num("POSITION_SYNC_RETRIES", 3, int))
+POSITION_SYNC_RETRY_DELAY_SEC = max(0.0, env_num("POSITION_SYNC_RETRY_DELAY_SEC", 1.0))
 # v5.17（文档 C12）→ v5.20 推广：全市场行情补齐。模拟盘（乃至实盘冷门币对）WS 成交推送稀疏，
 # 冷门币对可能整程收不到 tick（实证：26 个持仓中 22 个"启动后未收到行情"），买入信号/止盈
 # 评估/回本清仓全部停摆。v5.17 只兜底持仓；v5.20 起按 MARKET_GAP_INTERVAL_SEC 周期用 REST
@@ -1425,6 +1463,11 @@ POSITION_AUDIT_SEC = env_num("POSITION_AUDIT_SEC", 300.0)  # v5.14 运行期对�
 STALE_TICK_SEC = env_num("STALE_TICK_SEC", 300.0)   # 心跳 stale_positions 的"无行情"静默判定（秒）
 MARKET_GAP_TICK_SEC = env_num("MARKET_GAP_TICK_SEC", 45.0)           # 静默超过该秒数视为"无行情"，补一次
 MARKET_GAP_INTERVAL_SEC = env_num("MARKET_GAP_INTERVAL_SEC", 60.0)   # 行情补齐周期（秒）
+# v6.1：批量最新价 REST 失败重试与告警。原实现一次失败就静默跳过（仅 DEBUG），
+# 运行中曾出现连续多轮 "REST 批量最新价不可用" 而无任何可见告警。
+MARKET_GAP_REST_RETRIES = max(1, env_num("MARKET_GAP_REST_RETRIES", 3, int))
+MARKET_GAP_REST_RETRY_DELAY_SEC = max(0.0, env_num("MARKET_GAP_REST_RETRY_DELAY_SEC", 0.5))
+MARKET_GAP_REST_WARN_INTERVAL_SEC = max(60.0, env_num("MARKET_GAP_REST_WARN_INTERVAL_SEC", 300.0))
 def fetch_platform_positions(min_usd: float = POS_MIN_USD) -> Optional[Dict[str, Dict]]:
     """v5.14：读平台余额账本并折算成 {inst_id: {...}}；读失败/网络异常返回 None（不改判任何账本）。
     从 sync_positions_from_api 提取，启动全量对账与运行期轻量对账共用同一实现。
@@ -1484,13 +1527,23 @@ def fetch_all_ticker_prices() -> Optional[Dict[str, float]]:
     补齐行情——模拟盘 WS 成交推送稀疏，冷门币对可能整程收不到任何消息，买卖计算不能依赖它。
     从未成交的新上市产品（last 为空）用买一/卖一报价兜底（实证 RE-USDT）。
     失败（网络错/响应异常）返回 None，调用方本轮跳过、下轮再试；不产生任何交易副作用。
+    v6.1：单次失败按 MARKET_GAP_REST_RETRIES 重试（默认 3 次，间隔 0.5s），
+    降低偶发网络抖动导致整轮行情补齐失效的概率。
     """
     if _okx_client is None:
         return None
-    try:
-        payload = _okx_client._request("GET", "/api/v5/market/tickers",
-                                       query={"instType": "SPOT"}, auth=False, timeout=15)
-    except Exception:
+    payload = None
+    for attempt in range(MARKET_GAP_REST_RETRIES):
+        try:
+            payload = _okx_client._request("GET", "/api/v5/market/tickers",
+                                           query={"instType": "SPOT"}, auth=False, timeout=15)
+            break
+        except Exception:
+            if attempt + 1 >= MARKET_GAP_REST_RETRIES:
+                return None
+            if MARKET_GAP_REST_RETRY_DELAY_SEC > 0:
+                time.sleep(MARKET_GAP_REST_RETRY_DELAY_SEC)
+    if payload is None:
         return None
     out: Dict[str, float] = {}
     for row in payload.get("data") or []:
@@ -1535,11 +1588,21 @@ def _apply_platform_positions(api_positions: Dict[str, Dict], logger=None) -> bo
             for inst_id, data in api_positions.items():
                 if inst_id in local_pos:
                     old_qty = local_pos[inst_id].get("position_qty", 0)
+                    old_amount = local_pos[inst_id].get("position_amount", 0) or 0
                     cost = local_pos[inst_id].get("position_price", 0) or 0
                     local_pos[inst_id]["position_qty"] = data["position_qty"]
                     if abs(data["position_qty"] - old_qty) > 1e-12:
-                        if cost > 0:
-                            local_pos[inst_id]["position_amount"] = cost * data["position_qty"]
+                        # v6.1：数量微调（平台余额取整/手续费扣币）时按原"全成本单价"结转，
+                        # 而不是用 position_price 重算。原实现会抹掉买入手续费（实证 1INCH
+                        # 重启一次成本少 0.81 USDT），使保本价被低估、可能微亏离场。
+                        if old_qty > 0 and old_amount > 0:
+                            unit_cost = old_amount / old_qty
+                        elif cost > 0:
+                            unit_cost = cost
+                        else:
+                            unit_cost = 0.0
+                        if unit_cost > 0:
+                            local_pos[inst_id]["position_amount"] = unit_cost * data["position_qty"]
                         else:
                             local_pos[inst_id]["position_price"] = data["position_price"]
                             local_pos[inst_id]["position_amount"] = data["position_amount"]
@@ -2918,7 +2981,17 @@ def _okx_probe_and_sync(logger, exit_on_fatal: bool = True) -> bool:
         return False
     logger.info(f"OKX {'模拟盘' if TRADE_MODE == 'demo' else '实盘'}账户 USDT 可用余额: {bal:.2f}", "startup")
     _update_funds_for_view(bal)
-    if sync_positions_from_api(logger):
+    synced = False
+    for attempt in range(1, POSITION_SYNC_RETRIES + 1):
+        if sync_positions_from_api(logger):
+            synced = True
+            break
+        if attempt < POSITION_SYNC_RETRIES:
+            logger.warn(f"持仓同步第 {attempt}/{POSITION_SYNC_RETRIES} 次失败，"
+                        f"{POSITION_SYNC_RETRY_DELAY_SEC:g}s 后重试", "startup")
+            if POSITION_SYNC_RETRY_DELAY_SEC > 0:
+                time.sleep(POSITION_SYNC_RETRY_DELAY_SEC)
+    if synced:
         logger.info(f"持仓缓存已初始化（启动全量对齐完成；运行期每 {POSITION_AUDIT_SEC:.0f}s 轻量对账一次）", "startup")
     else:
         logger.warn("持仓同步未完成，运行期以本地账本为准继续执行", "startup")
@@ -3164,6 +3237,14 @@ class SymbolState:
         # 由 MarketEngine.add_state 之后统一 sync_all_buy_queue()（启动期一次读写）
         self._last_processed_price = 0.0
         self._last_processed_ts = 0.0
+        # v6.1：异常行情过滤状态
+        self._last_good_price = 0.0
+        self._last_good_ts = 0.0
+        self._last_any_tick_ts = 0.0
+        self._abnormal_candidate_price = 0.0
+        self._abnormal_candidate_count = 0
+        self._abnormal_last_log_ts = 0.0
+        self._abnormal_rejected_total = 0
         # v5.7：运行期依据本地账本，此处只读启动同步快照，不再请求平台
         if self.client is not None:
             snapshot = get_positions_snapshot()
@@ -3350,6 +3431,18 @@ class SymbolState:
         return self.position_price * (1.0 + 2.0 * TAKER_FEE_RATE)
     def _is_breakeven(self, price: float) -> bool:
         return price >= self._breakeven_price()
+    def _sell_pending(self) -> bool:
+        """v6.1：是否已有卖单在途/处于挂单占用退避期。
+
+        该窗口内重复评估清仓原因只会刷屏（1INCH 曾一秒内打印 7 次"清仓1"），
+        _request_sell 本身也会拒绝；这里供持仓管理入口提前短路，避免重复日志与重复请求。
+        """
+        if getattr(self, "order_in_flight", None):
+            return True
+        try:
+            return time.time() < float(self._sell_blocked_until or 0.0)
+        except (TypeError, ValueError):
+            return False
     def _can_sell(self, price: float, min_profit_pct: Optional[float] = 0.05):
         """卖出资格检查（v5.10：按文档 9.1.3 的第二个建议改为显式阈值参数）
         price 必须显式给出，取消回退 _last_processed_price 的不可达分支；
@@ -3441,13 +3534,15 @@ class SymbolState:
         alerts = []
         cur = self.levels
         direction = None
-        if price > cur.high:
+        up_trigger = cur.high * (1.0 + LAYER_SHIFT_HYSTERESIS_PCT)
+        down_trigger = cur.low * (1.0 - LAYER_SHIFT_HYSTERESIS_PCT)
+        if price > up_trigger:
             direction = "up"
-            while price > self.levels.high:
+            while price > self.levels.high * (1.0 + LAYER_SHIFT_HYSTERESIS_PCT):
                 self.levels = self.levels.shifted("up")
-        elif price < cur.low:
+        elif price < down_trigger:
             direction = "down"
-            while price < self.levels.low:
+            while price < self.levels.low * (1.0 - LAYER_SHIFT_HYSTERESIS_PCT):
                 self.levels = self.levels.shifted("down")
         if direction is None:
             return alerts
@@ -3591,6 +3686,11 @@ class SymbolState:
         profit_pct = (price - self.position_price) / self.position_price if self.position_price > 0 else 0
         if profit_pct < self.max_loss_pct:
             self.max_loss_pct = profit_pct
+        # v6.1：卖单在途/挂单占用退避期间，只更新峰值与止盈状态，不再逐 tick 重复判定清仓。
+        # 之前 1INCH 一秒内打印 7 次"清仓1"、LAT 在受阻期每分钟重复打印，均由此处重复进入导致。
+        if self._sell_pending():
+            self._check_take_profit(price, allow_sell=False)
+            return alerts
         # 铁律（2026-10-19 用户要求；.env 可调 HARD_STOP_LOSS_PCT，默认 12.5%）：个股最大亏损底线——触发即市价止损清仓。
         # 对所有买入类型生效、优先于其余清仓规则；下一买点按买入类型（同回本清仓 E4）。
         if profit_pct <= -HARD_STOP_LOSS_PCT:
@@ -4356,7 +4456,7 @@ class SymbolState:
             })
         save_buy_queue(rows)
         self.buy_queue = rows
-    def _check_take_profit(self, price):
+    def _check_take_profit(self, price, allow_sell: bool = True):
         if not self.has_position or self.position_price <= 0:
             return None
         profit_pct = (price - self.position_price) / self.position_price
@@ -4370,6 +4470,8 @@ class SymbolState:
 
         stop_ratio = get_stop_loss(profit_pct)
         if stop_ratio == 0 and profit_pct >= STOP_LOSS_ZERO_PCT:
+            if not allow_sell:
+                return None
             self.logger.info(f"{self.inst_id} 盈利 ≥{STOP_LOSS_ZERO_PCT*100:g}%，立即清仓", "profit_trigger")
             return self._request_sell(price, f"盈利率 {profit_pct*100:.1f}% ≥{STOP_LOSS_ZERO_PCT*100:g}%，清仓")
 
@@ -4396,6 +4498,8 @@ class SymbolState:
             # 跌破保本价则保留持仓与激活状态继续盯盘，价格回到保本价之上即离场。
             be = self._breakeven_price()
             if self._is_breakeven(price):
+                if not allow_sell:
+                    return None
                 self.logger.info(f"{self.inst_id} 触发止盈清仓: 当前价 {price:.8g} ≤ 止盈价 {self.stop_price:.8g}，保本价 {be:.8g}（含 {TAKER_FEE_RATE*100:.2f}%×2 手续费）", "stop_loss_trigger")
                 return self._request_sell(price, f"止盈清仓 (峰值 {self.peak_price:.8g}, 回撤 {stop_ratio*100:.1f}%)", min_profit_pct=None)
             self.logger.debug(f"{self.inst_id} 止盈价 {self.stop_price:.8g} 已被跌穿但当前价 {price:.8g} 低于保本价 {be:.8g}（名义成本 {self.position_price:.8g}），不亏本卖出，保留激活继续盯盘")
@@ -4452,9 +4556,77 @@ class SymbolState:
             f"本地记录已清除（OKX 侧残币 <1 USDT 可忽略）")
         return f"粉尘清账 {cash:.8g} {base_ccy}"
 
+    def _tick_is_abnormal(self, price) -> bool:
+        """v6.1：异常行情过滤（不改变任何策略阈值）。
+
+        模拟盘 MASK-USDT 曾多次推送单笔 0.001（正常价约 0.395）的极端成交，导致层界
+        连环下移再回升。规则：
+        - 与最近有效价偏离 ≤ ABNORMAL_TICK_MAX_DEVIATION_PCT：正常，刷新基准；
+        - 偏离超限：先拦截，并记录为候选；
+        - 连续 ABNORMAL_TICK_CONFIRM_COUNT 个候选价相互接近（≤ 确认容差）才认定为真实
+          行情，接受该价并重建基准；
+        - 超过 ABNORMAL_TICK_RESET_SEC 没有任何 tick：下一笔直接作为新基准，避免卡死。
+        返回值 True 表示本 tick 应被丢弃。
+        """
+        if price <= 0:
+            # 非正价格在任何模式下都不应进入账务/策略计算
+            self._abnormal_rejected_total += 1
+            now = time.time()
+            if now - self._abnormal_last_log_ts >= ABNORMAL_TICK_LOG_THROTTLE_SEC:
+                self._abnormal_last_log_ts = now
+                self.logger.warn(f"{self.inst_id} 忽略非法行情价格 {price!r}", "market_gap")
+            return True
+        if not ABNORMAL_TICK_ENABLED:
+            return False
+        now = time.time()
+        ref = self._last_good_price
+        # 只有"完全没有行情"才重建基准；若极端 tick 仍在持续到达，走候选确认流程，
+        # 避免因上一笔有效价较久而把单笔异常价直接当成新基准。
+        if ref <= 0 or (now - self._last_any_tick_ts) > ABNORMAL_TICK_RESET_SEC:
+            self._last_good_price = price
+            self._last_good_ts = now
+            self._last_any_tick_ts = now
+            self._abnormal_candidate_price = 0.0
+            self._abnormal_candidate_count = 0
+            return False
+        self._last_any_tick_ts = now
+        dev = abs(price - ref) / ref
+        if dev <= ABNORMAL_TICK_MAX_DEVIATION_PCT:
+            self._last_good_price = price
+            self._last_good_ts = now
+            self._abnormal_candidate_price = 0.0
+            self._abnormal_candidate_count = 0
+            return False
+        cand = self._abnormal_candidate_price
+        if cand > 0 and abs(price - cand) / cand <= ABNORMAL_TICK_CONFIRM_TOLERANCE_PCT:
+            self._abnormal_candidate_count += 1
+        else:
+            self._abnormal_candidate_price = price
+            self._abnormal_candidate_count = 1
+        if self._abnormal_candidate_count >= ABNORMAL_TICK_CONFIRM_COUNT:
+            self.logger.warn(
+                f"{self.inst_id} 极端价格连续 {self._abnormal_candidate_count} 次确认，"
+                f"接受为新基准 {price:.8g}（旧基准 {ref:.8g}，偏离 {dev*100:.1f}%）", "market_gap")
+            self._last_good_price = price
+            self._last_good_ts = now
+            self._abnormal_candidate_price = 0.0
+            self._abnormal_candidate_count = 0
+            return False
+        self._abnormal_rejected_total += 1
+        if now - self._abnormal_last_log_ts >= ABNORMAL_TICK_LOG_THROTTLE_SEC:
+            self._abnormal_last_log_ts = now
+            self.logger.warn(
+                f"{self.inst_id} 忽略异常行情 {price:.8g}（有效基准 {ref:.8g}，偏离 {dev*100:.1f}%；"
+                f"候选 {self._abnormal_candidate_count}/{ABNORMAL_TICK_CONFIRM_COUNT}）", "market_gap")
+        return True
+
     def update_price(self, price, ts):
         alerts = []
         if price == self._last_processed_price and ts == self._last_processed_ts:
+            return alerts
+        # v6.1：异常 tick 不进入换层/买卖/持仓管理，也不刷新 last_tick_ts，
+        # 让 REST 补齐继续工作、协助确认真实价格。
+        if self._tick_is_abnormal(price):
             return alerts
         self._last_processed_price = price
         self._last_processed_ts = ts
@@ -4646,6 +4818,9 @@ class MarketEngine:
         # v5.17（文档 C12）→ v5.20：行情补齐节流（每 MARKET_GAP_INTERVAL_SEC 一轮）
         self._last_stale_poll_ts = 0.0
         self._last_market_gap_fed = 0   # v5.20：上轮补齐实际喂入数量（心跳 market_gap_fed）
+        # v6.1：批量最新价 REST 连续失败计数/告警节流
+        self._market_gap_rest_failures = 0
+        self._market_gap_rest_last_warn_ts = 0.0
         # v5.18（文档 C7）：订单执行线程（行情线程锁内只投递任务，下单/等成交在锁外）
         self.orders = OrderExecutor(self)
     def add_state(self, inst_id, ref_high, ref_low, position_only=False):
@@ -4969,9 +5144,21 @@ class MarketEngine:
             return 0
         prices = fetch_all_ticker_prices()      # 锁外 REST：一次批量取全部现货
         if not prices:
-            self.logger.debug("行情补齐：REST 批量最新价不可用，本轮跳过")
+            self._market_gap_rest_failures += 1
+            now_warn = time.time()
+            if (self._market_gap_rest_failures == 1
+                    or now_warn - self._market_gap_rest_last_warn_ts >= MARKET_GAP_REST_WARN_INTERVAL_SEC):
+                self._market_gap_rest_last_warn_ts = now_warn
+                self.logger.warn(
+                    f"行情补齐：REST 批量最新价连续 {self._market_gap_rest_failures} 轮不可用"
+                    f"（每轮已重试 {MARKET_GAP_REST_RETRIES} 次），本轮跳过；"
+                    f"待补齐 {len(picked)} 个币对", "market_gap")
             self._last_market_gap_fed = 0
             return 0
+        if self._market_gap_rest_failures:
+            self.logger.info(f"行情补齐：REST 批量最新价已恢复（此前连续失败 "
+                             f"{self._market_gap_rest_failures} 轮）", "market_gap")
+            self._market_gap_rest_failures = 0
         fed = 0
         for st in picked:
             px = prices.get(st.inst_id)
@@ -5336,9 +5523,11 @@ def main():
     logger.info(f"OKX 行情线程启动: {len(okx_inst_ids)} 个币对", "startup")
     logger.info("=" * 60, "startup")
     logger.info("系统运行中，Ctrl+C 或 kill(SIGTERM) 均可停止（停止时会先把脏账本落盘）", "startup")
-    logger.info("买入规则：价格跌破买点后，从最低点反弹1%时买入（且价格仍低于买点）", "startup")
-    logger.info(f"卖出规则(v5.8)：普通持仓盈利≥{STOP_LOSS_TRIGGER_PCT*100:g}%激活动态止盈；激活后每个tick检查止盈价，跌穿止盈价且价格≥成本即市价清仓(绝不亏本卖)，跌破成本则保留激活继续盯盘；盈利≥{STOP_LOSS_ZERO_PCT*100:g}%直接清仓；持仓历史最大亏损>{BREAKEVEN_CLEAR_LOSS_PCT*100:g}%可回本即清仓；铁律：个股亏损达{HARD_STOP_LOSS_PCT*100:g}%市价止损清仓(下一买点按买入类型)", "startup")
-    logger.info(f"超范围剔除: 越界即剔除并记表，价格回到区间(内缩{RANGE_HYSTERESIS_PCT*100:.2f}%滞回带)自动恢复买入，翻转间隔≥{RANGE_FLIP_MIN_INTERVAL_SEC:.0f}s", "startup")
+    logger.info("买入规则(v6)：高位买点=下破回撤下后参考最低120分钟不创新低且不破高位中间，按执行价限价买入；低位买点=下破极限下后120分钟不创新低且不破地板，按执行价限价买入", "startup")
+    logger.info(f"卖出规则(v6)：普通持仓盈利≥{STOP_LOSS_TRIGGER_PCT*100:g}%激活动态止盈；激活后每个tick检查止盈价，跌穿止盈价且价格≥成本即市价清仓(绝不亏本卖)，跌破成本则保留激活继续盯盘；盈利≥{STOP_LOSS_ZERO_PCT*100:g}%直接清仓；持仓历史最大亏损>{BREAKEVEN_CLEAR_LOSS_PCT*100:g}%可回本即清仓；铁律：个股亏损达{HARD_STOP_LOSS_PCT*100:g}%市价止损清仓(下一买点按买入类型)", "startup")
+    logger.info(f"换层规则(v6)：价格越过层界{LAYER_SHIFT_HYSTERESIS_PCT*100:.2f}%滞回带才换层（层界×2/÷2，支持跨多层）；无持仓上破不追高", "startup")
+    logger.info(f"行情保护(v6)：单个tick偏离有效价>{ABNORMAL_TICK_MAX_DEVIATION_PCT*100:g}%先拦截，"
+                f"连续{ABNORMAL_TICK_CONFIRM_COUNT}个相近极端价才确认；卖出在途/退避期不重复清仓", "startup")
     logger.info("检查频率: 持仓止盈/止损每个行情tick实时评估，check_level 仅作账本标签(T0止盈中/T1盈利/T2配对/T3默认)", "startup")
     logger.info("=" * 60, "startup")
     last_heartbeat = 0.0

@@ -89,8 +89,8 @@
    "ref_low": 0.0141796875
   },
   "BLUR-USDT": {
-   "ref_high": 0.015625,
-   "ref_low": 0.0078125
+   "ref_high": 0.0078125,
+   "ref_low": 0.00390625
   },
   "BONK-USDT": {
    "ref_high": 3.8064375e-06,
@@ -103,6 +103,10 @@
   "CAT-USDT": {
    "ref_high": 2.1675e-06,
    "ref_low": 1.08375e-06
+  },
+  "CELO-USDT": {
+   "ref_high": 0.08302265625,
+   "ref_low": 0.041511328125
   },
   "CHZ-USDT": {
    "ref_high": 0.01476390625,
@@ -128,6 +132,10 @@
    "ref_high": 0.00114034375,
    "ref_low": 0.000570171875
   },
+  "DYDX-USDT": {
+   "ref_high": 0.1171875,
+   "ref_low": 0.05859375
+  },
   "EDGE-USDT": {
    "ref_high": 0.38655,
    "ref_low": 0.193275
@@ -136,9 +144,17 @@
    "ref_high": 4.3896875,
    "ref_low": 2.19484375
   },
+  "ENS-USDT": {
+   "ref_high": 5.36795,
+   "ref_low": 2.683975
+  },
   "FET-USDT": {
    "ref_high": 0.21774375,
    "ref_low": 0.108871875
+  },
+  "FIL-USDT": {
+   "ref_high": 0.92898046875,
+   "ref_low": 0.464490234375
   },
   "FLOW-USDT": {
    "ref_high": 0.043037109375,
@@ -160,9 +176,17 @@
    "ref_high": 0.00859375,
    "ref_low": 0.004296875
   },
+  "GOAT-USDT": {
+   "ref_high": 0.0146875,
+   "ref_low": 0.00734375
+  },
   "GRAM-USDT": {
    "ref_high": 1.844,
    "ref_low": 0.922
+  },
+  "GRT-USDT": {
+   "ref_high": 0.022578125,
+   "ref_low": 0.0112890625
   },
   "HMSTR-USDT": {
    "ref_high": 0.000207375,
@@ -176,13 +200,17 @@
    "ref_high": 3.884765625,
    "ref_low": 1.9423828125
   },
-  "IRYS-USDT": {
-   "ref_high": 0.014995,
-   "ref_low": 0.0074975
+  "IOST-USDT": {
+   "ref_high": 0.00102734375,
+   "ref_low": 0.000513671875
   },
   "KAT-USDT": {
    "ref_high": 0.00766925,
    "ref_low": 0.003834625
+  },
+  "KNC-USDT": {
+   "ref_high": 0.1228125,
+   "ref_low": 0.06140625
   },
   "KSM-USDT": {
    "ref_high": 4.882734375,
@@ -199,6 +227,10 @@
   "LINEA-USDT": {
    "ref_high": 0.00346875,
    "ref_low": 0.001734375
+  },
+  "LPT-USDT": {
+   "ref_high": 1.554375,
+   "ref_low": 0.7771875
   },
   "LRC-USDT": {
    "ref_high": 0.015,
@@ -252,10 +284,6 @@
    "ref_high": 0.1519875,
    "ref_low": 0.07599375
   },
-  "PARTI-USDT": {
-   "ref_high": 0.03093125,
-   "ref_low": 0.015465625
-  },
   "PAXG-USDT": {
    "ref_high": 5639.7,
    "ref_low": 2819.85
@@ -263,6 +291,10 @@
   "PI-USDT": {
    "ref_high": 0.09375,
    "ref_low": 0.046875
+  },
+  "PIXEL-USDT": {
+   "ref_high": 0.004828125,
+   "ref_low": 0.0024140625
   },
   "POL-USDT": {
    "ref_high": 0.0960625,
@@ -301,8 +333,8 @@
    "ref_low": 0.5014
   },
   "ROBO-USDT": {
-   "ref_high": 0.012525,
-   "ref_low": 0.0062625
+   "ref_high": 0.0062625,
+   "ref_low": 0.00313125
   },
   "RON-USDT": {
    "ref_high": 0.071296875,
@@ -311,6 +343,10 @@
   "RPL-USDT": {
    "ref_high": 2.0625,
    "ref_low": 1.03125
+  },
+  "RSR-USDT": {
+   "ref_high": 0.00185625,
+   "ref_low": 0.000928125
   },
   "RVN-USDT": {
    "ref_high": 0.002300859375,
@@ -328,13 +364,13 @@
    "ref_high": 0.02254375,
    "ref_low": 0.011271875
   },
-  "SD-USDT": {
-   "ref_high": 0.1171875,
-   "ref_low": 0.05859375
-  },
   "SHIB-USDT": {
    "ref_high": 5.554375e-06,
    "ref_low": 2.7771875e-06
+  },
+  "SKL-USDT": {
+   "ref_high": 0.00420078125,
+   "ref_low": 0.002100390625
   },
   "SNX-USDT": {
    "ref_high": 0.226484375,
@@ -380,6 +416,10 @@
    "ref_high": 2.5625,
    "ref_low": 1.28125
   },
+  "UMA-USDT": {
+   "ref_high": 0.3515625,
+   "ref_low": 0.17578125
+  },
   "USAT-USDT": {
    "ref_high": 1.0067,
    "ref_low": 0.50335
@@ -395,6 +435,10 @@
   "USDS-USDT": {
    "ref_high": 1.05,
    "ref_low": 0.525
+  },
+  "VINE-USDT": {
+   "ref_high": 0.00765625,
+   "ref_low": 0.003828125
   },
   "W-USDT": {
    "ref_high": 0.01421875,
@@ -433,8 +477,8 @@
    "ref_low": 0.0224421875
   },
   "ZIL-USDT": {
-   "ref_high": 0.0040103125,
-   "ref_low": 0.00200515625
+   "ref_high": 0.00200515625,
+   "ref_low": 0.001002578125
   },
   "ZKJ-USDT": {
    "ref_high": 0.00909296875,
@@ -445,7 +489,7 @@
    "ref_low": 0.0036065625
   }
  },
- "saved_at": "2026-10-23 03:32:13",
+ "saved_at": "2026-10-29 20:20:59",
  "system_params": {
   "break_alert_interval": 1020,
   "break_alert_max": 4,
@@ -459,5 +503,5 @@
   "total_funds": 1000000.0,
   "trade_mode": "demo"
  },
- "version": "v6.0"
+ "version": "v6.1"
 }
